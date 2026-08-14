@@ -34,38 +34,11 @@ const ROW_CELL = "flex min-h-14 min-w-0 items-center py-2.5";
 const PILL =
   "inline-flex h-[22px] w-[6.75rem] shrink-0 items-center justify-center gap-1 rounded-full px-2 text-[11px] font-medium transition-[background-color,color] duration-[var(--shell-duration)] ease-[var(--shell-ease)]";
 
-const PILL_LABEL =
-  "col-start-1 row-start-1 leading-none transition-opacity duration-[var(--shell-duration)] ease-[var(--shell-ease)]";
-
 function StatusPill({ status }: { status: StatusTone }) {
   const meta = statusMeta(status);
   return (
     <span className={`${PILL} ${meta.className}`}>
-      <span className="grid justify-items-center">
-        <span
-          className={PILL_LABEL}
-          style={{ opacity: status === "original" ? 1 : 0 }}
-          aria-hidden={status !== "original"}
-        >
-          Original
-        </span>
-        <span
-          className={PILL_LABEL}
-          style={{ opacity: status === "duplicate" ? 1 : 0 }}
-          aria-hidden={status !== "duplicate"}
-        >
-          Duplicate
-        </span>
-        <span
-          className={PILL_LABEL}
-          style={{
-            opacity: status !== "original" && status !== "duplicate" ? 1 : 0,
-          }}
-          aria-hidden={status === "original" || status === "duplicate"}
-        >
-          {meta.label}
-        </span>
-      </span>
+      <span className="leading-none">{meta.label}</span>
     </span>
   );
 }
