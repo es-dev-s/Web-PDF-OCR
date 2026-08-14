@@ -1,6 +1,15 @@
+function normalizeOrigin(raw: string | undefined, fallback: string) {
+  let origin = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!origin) origin = fallback;
+  if (!/^https?:\/\//i.test(origin)) origin = `https://${origin}`;
+  return origin;
+}
+
 export const SAME_ORIGIN_BACKEND = "/backend";
-export const DIRECT_BACKEND =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8001";
+export const DIRECT_BACKEND = normalizeOrigin(
+  process.env.NEXT_PUBLIC_BACKEND_URL,
+  "http://127.0.0.1:8001",
+);
 
 export const BACKEND_CANDIDATES = Array.from(
   new Set([SAME_ORIGIN_BACKEND, DIRECT_BACKEND]),
