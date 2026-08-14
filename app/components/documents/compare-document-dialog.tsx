@@ -4,20 +4,13 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { SAME_ORIGIN_BACKEND } from "@/app/lib/backend";
-import { fileKind, uniquenessMeta, type SourceUniqueness } from "@/app/lib/files";
+import { uniquenessMeta, type SourceUniqueness } from "@/app/lib/files";
 import { useChromeStore } from "@/app/store/chrome-store";
 import {
   useDocumentsStore,
   type DocumentItem,
   type DuplicateMatch,
-  type SourceFile,
 } from "@/app/store/documents-store";
-
-function previewSrc(url: string, kind: string) {
-  if (kind !== "PDF") return url;
-  const hash = url.includes("#") ? "" : "#toolbar=0&navpanes=0&view=FitH";
-  return `${url}${hash}`;
-}
 
 function builtFileUrl(documentId?: string, sourceId?: string) {
   if (!documentId || !sourceId) return "";
@@ -33,46 +26,34 @@ function resolveMatchFile(
   items: DocumentItem[],
   currentSourceId: string,
 ): { url: string; contentType?: string } {
-  if (match.fileUrl) {
-    return { url: match.fileUrl, contentType: match.contentType };
-  }
-  const built = builtFileUrl(match.documentId, match.sourceId);
-  if (built) {
-    return { url: built, contentType: match.contentType };
+  if (match.documentId && match.sourceId) {
+    return {
+      url: match.fileUrl || builtFileUrl(match.documentId, match.sourceId),
+      contentType: match.contentType,
+    };
   }
   if (match.sourceId) {
     for (const item of items) {
       const source = item.sources.find((row) => row.id === match.sourceId);
-      if (source?.fileUrl) {
-        return { url: source.fileUrl, contentType: source.contentType };
-      }
+      if (!source) continue;
+      return {
+        url: source.fileUrl || builtFileUrl(item.id, source.id),
+        contentType: source.contentType || match.contentType,
+      };
     }
   }
   const erp = norm(match.erp);
   const title = norm(match.title);
-  const collect = (requireErp: boolean) => {
-    const found: SourceFile[] = [];
-    for (const item of items) {
-      if (requireErp && erp && norm(item.erp) !== erp) continue;
-      for (const source of item.sources) {
-        if (source.id === currentSourceId || !source.fileUrl) continue;
-        found.push(source);
-      }
+  for (const item of items) {
+    if (erp && norm(item.erp) !== erp) continue;
+    for (const source of item.sources) {
+      if (source.id === currentSourceId) continue;
+      if (title && norm(source.title) !== title) continue;
+      const url = source.fileUrl || builtFileUrl(item.id, source.id);
+      if (url) return { url, contentType: source.contentType || match.contentType };
     }
-    return found;
-  };
-  let ranked = collect(true);
-  if (ranked.length === 0) ranked = collect(false);
-  const titled = title
-    ? ranked.filter((source) => norm(source.title) === title)
-    : [];
-  const pool = titled.length > 0 ? titled : ranked;
-  const preferred =
-    pool.find((source) => source.uniqueness === match.uniqueness) ??
-    pool.find((source) => source.uniqueness === "original") ??
-    pool[0];
-  if (!preferred?.fileUrl) return { url: "" };
-  return { url: preferred.fileUrl, contentType: preferred.contentType };
+  }
+  return { url: match.fileUrl || "", contentType: match.contentType };
 }
 
 function FileStage({
@@ -84,45 +65,83 @@ function FileStage({
   contentType?: string
   label: string
 }) {
-  const kind = fileKind(contentType);
-  if (!url) {
+  const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">(
+    url ? "loading" : "empty",
+  );
+  const [src, setSrc] = useState("");
+  const [kind, setKind] = useState<"PDF" | "image">("PDF");
+
+  useEffect(() => {
+    if (!url) {
+      setStatus("empty");
+      setSrc("");
+      return;
+    }
+    const ac = new AbortController();
+    const typeHint = (contentType ?? "").toLowerCase();
+    setStatus("loading");
+    setSrc("");
+    void fetch(url, { method: "HEAD", signal: ac.signal, cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 405 || response.status === 501) {
+          return fetch(url, { method: "GET", signal: ac.signal, cache: "no-store" });
+        }
+        return response;
+      })
+      .then((response) => {
+        if (ac.signal.aborted) return;
+        if (!response.ok) throw new Error("unavailable");
+        const type = (response.headers.get("content-type") || typeHint).toLowerCase();
+        if (type.includes("application/json") || type.includes("text/html")) {
+          throw new Error("unavailable");
+        }
+        setKind(type.startsWith("image/") ? "image" : "PDF");
+        setSrc(url);
+        setStatus("ready");
+      })
+      .catch((error) => {
+        if (ac.signal.aborted) return;
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setStatus("error");
+      });
+    return () => ac.abort();
+  }, [url, contentType]);
+
+  if (status === "loading") {
     return (
-      <div className="flex h-full items-center justify-center px-8 text-center">
-        <p className="text-[13px] text-muted">This file isn’t available to preview.</p>
+      <div className="flex h-full items-center justify-center">
+        <p className="text-[13px] text-muted-soft">Loading preview</p>
       </div>
     );
   }
-  if (kind === "PDF" || !contentType) {
+  if (status === "empty" || status === "error" || !src) {
+    return (
+      <div className="flex h-full items-center justify-center px-8 text-center">
+        <p className="text-[13px] leading-5 text-muted">
+          {status === "empty"
+            ? "This file isn’t available to preview."
+            : "This file isn’t in storage."}
+        </p>
+      </div>
+    );
+  }
+  if (kind === "PDF") {
     return (
       <iframe
-        src={previewSrc(url, "PDF")}
+        src={`${src}#toolbar=0&navpanes=0&view=FitH`}
         title={label}
         className="h-full w-full border-0 bg-white"
       />
     );
   }
-  if (kind !== "File") {
-    return (
-      <div className="flex h-full items-center justify-center bg-[var(--canvas)] p-8">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={url}
-          alt={label}
-          className="max-h-full max-w-full object-contain"
-        />
-      </div>
-    );
-  }
   return (
-    <div className="flex h-full items-center justify-center px-8 text-center">
-      <a
-        href={url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-[13px] font-medium text-accent outline-none hover:underline focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
-      >
-        Open file
-      </a>
+    <div className="flex h-full items-center justify-center bg-[var(--canvas)] p-8">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={label}
+        className="max-h-full max-w-full object-contain"
+      />
     </div>
   );
 }
@@ -345,7 +364,8 @@ export function CompareDocumentDialog() {
             />
             <div className="min-h-0 flex-1 bg-[var(--canvas)]">
               <FileStage
-                url={source.fileUrl}
+                key={source.fileUrl || builtFileUrl(item.id, source.id)}
+                url={source.fileUrl || builtFileUrl(item.id, source.id)}
                 contentType={source.contentType}
                 label={source.title}
               />
@@ -380,6 +400,7 @@ export function CompareDocumentDialog() {
                 />
                 <div className="min-h-0 flex-1 bg-[var(--canvas)]">
                   <FileStage
+                    key={resolved.url || match.id}
                     url={resolved.url}
                     contentType={resolved.contentType ?? match.contentType}
                     label={match.title}
