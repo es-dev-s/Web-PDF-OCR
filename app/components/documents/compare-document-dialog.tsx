@@ -291,12 +291,14 @@ export function CompareDocumentDialog() {
   const resolved = match
     ? resolveMatchFile(match, items, source.id)
     : { url: "" };
+  const solo = duplicates.length === 0;
+  const heading = solo ? "View" : "Compare";
 
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-2.5 sm:p-3.5">
       <button
         type="button"
-        aria-label="Close compare"
+        aria-label={solo ? "Close view" : "Close compare"}
         className="absolute inset-0 bg-black/28 backdrop-blur-[3px]"
         style={{ animation: "backdropIn 180ms var(--shell-ease) both" }}
         onClick={closeCompare}
@@ -314,7 +316,7 @@ export function CompareDocumentDialog() {
             id={titleId}
             className="text-[15px] font-semibold tracking-[-0.02em] text-ink"
           >
-            Compare
+            {heading}
           </h2>
           <button
             ref={closeRef}
@@ -327,10 +329,16 @@ export function CompareDocumentDialog() {
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-[var(--border)] lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+        <div
+          className={`grid min-h-0 flex-1 grid-cols-1 ${
+            solo
+              ? ""
+              : "divide-y divide-[var(--border)] lg:grid-cols-2 lg:divide-x lg:divide-y-0"
+          }`}
+        >
           <section className="flex min-h-0 flex-col">
             <PaneHead
-              kicker="This file"
+              kicker={solo ? "File" : "This file"}
               title={source.title}
               detail={[item.client, source.uploaded].filter(Boolean).join(" · ")}
               uniqueness={source.uniqueness}
@@ -344,6 +352,7 @@ export function CompareDocumentDialog() {
             </div>
           </section>
 
+          {solo ? null : (
           <section className="flex min-h-0 flex-col">
             {match ? (
               <>
@@ -385,6 +394,7 @@ export function CompareDocumentDialog() {
               </div>
             )}
           </section>
+          )}
         </div>
       </div>
     </div>,

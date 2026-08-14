@@ -182,6 +182,23 @@ function emptyInspect(): InspectResult {
   return { ok: false, uniqueness: "unique", matches: [] };
 }
 
+function combineSignals(signal?: AbortSignal, timeout?: AbortSignal): AbortSignal | undefined {
+  if (!signal) return timeout;
+  if (!timeout) return signal;
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any([signal, timeout]);
+  }
+  const ac = new AbortController();
+  const abort = () => ac.abort();
+  if (signal.aborted || timeout.aborted) {
+    ac.abort();
+    return ac.signal;
+  }
+  signal.addEventListener("abort", abort, { once: true });
+  timeout.addEventListener("abort", abort, { once: true });
+  return ac.signal;
+}
+
 async function postFile<T>(
   path: string,
   file: File,
@@ -190,10 +207,7 @@ async function postFile<T>(
   const form = new FormData();
   form.append("file", file);
   const timeout = AbortSignal.timeout(120_000);
-  const combined =
-    signal && "any" in AbortSignal
-      ? AbortSignal.any([signal, timeout])
-      : timeout;
+  const combined = combineSignals(signal, timeout);
   const response = await fetch(url(path), {
     method: "POST",
     body: form,

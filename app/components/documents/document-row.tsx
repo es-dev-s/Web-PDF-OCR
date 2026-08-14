@@ -359,17 +359,28 @@ const SourceRow = memo(function SourceRow({
         </div>
         <div className={`${SOURCE_BODY_CELL} justify-end`}>
           <div className={ACTION_SLOT}>
-            <SourceAction
-              label="Compare"
-              widthClass="w-[5.75rem]"
-              disabled={!source}
-              pressed={comparing}
-              onClick={() => {
-                if (source) onCompare(source.id);
-              }}
-            >
-              <GitCompare className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-            </SourceAction>
+            {source && source.duplicates.length > 0 ? (
+              <SourceAction
+                label="Compare"
+                widthClass="w-[5.75rem]"
+                pressed={comparing}
+                onClick={() => onCompare(source.id)}
+              >
+                <GitCompare className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+              </SourceAction>
+            ) : (
+              <SourceAction
+                label="View"
+                widthClass="w-[5.75rem]"
+                disabled={!source}
+                pressed={comparing}
+                onClick={() => {
+                  if (source) onCompare(source.id);
+                }}
+              >
+                <Eye className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+              </SourceAction>
+            )}
             <SourceAction
               label="Add"
               widthClass="w-[3.5rem]"
@@ -399,7 +410,9 @@ const SourceRow = memo(function SourceRow({
 function DocumentSources({ item }: { item: DocumentItem }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const addSources = useDocumentsStore((s) => s.beginAddSources);
-  const adding = useDocumentsStore((s) => s.addingToId === item.id);
+  const adding = useDocumentsStore(
+    (s) => s.addingToId !== null || s.pendingSourceAdd !== null,
+  );
   const canAdd = item.sources.length < SOURCE_TOTAL && !adding;
 
   const onAdd = useCallback(() => {

@@ -11,6 +11,7 @@ import {
   type ApiSource,
   type InspectResult,
 } from "@/app/lib/api";
+import { anzscoMatches } from "@/app/lib/anzsco";
 import { formatDate, formatDateTime } from "@/app/lib/dates";
 import { SOURCE_TOTAL, parseDocumentStatus, parseUniqueness, type DocumentStatus, type SourceUniqueness } from "@/app/lib/files";
 import { useUserStore } from "@/app/store/user-store";
@@ -114,7 +115,22 @@ type DocumentsState = {
 
 const EMPTY: DocumentItem[] = [];
 let refreshLock = false;
+let refreshAgain = false;
+let mutateGen = 0;
+let addInspectCtl: AbortController | null = null;
+let addInspectDoc: string | null = null;
 const inFlightDeletes = new Map<string, DocumentItem>();
+
+function bumpMutate() {
+  mutateGen += 1;
+}
+
+function abortAddInspect(id?: string) {
+  if (id && addInspectDoc !== id) return;
+  addInspectCtl?.abort();
+  addInspectCtl = null;
+  addInspectDoc = null;
+}
 
 function matchesQuery(item: DocumentItem, query: string): boolean {
   if (!query) return true;
@@ -123,9 +139,9 @@ function matchesQuery(item: DocumentItem, query: string): boolean {
     item.uploader.toLowerCase().includes(query) ||
     item.erp.toLowerCase().includes(query) ||
     item.client.toLowerCase().includes(query) ||
-    item.anzsco.toLowerCase().includes(query) ||
     item.team.toLowerCase().includes(query) ||
-    item.member.toLowerCase().includes(query)
+    item.member.toLowerCase().includes(query) ||
+    anzscoMatches(item.anzsco, query)
   ) {
     return true;
   }
@@ -270,7 +286,11 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     if (!current || !current.sources.some((source) => source.id === sourceId)) return;
     const pending = get().pendingCompare;
     if (pending?.docId === docId && pending.sourceId === sourceId) return;
-    set({ pendingCompare: { docId, sourceId }, pendingDeleteId: null });
+    set({
+      pendingCompare: { docId, sourceId },
+      pendingDeleteId: null,
+      pendingViewId: null,
+    });
   },
   closeCompare: () => {
     if (get().pendingCompare === null) return;
@@ -318,6 +338,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   },
   upsert: (item) => {
     if (inFlightDeletes.has(item.id)) return;
+    bumpMutate();
     set((state) => {
       const index = state.items.findIndex((current) => current.id === item.id);
       const items =
@@ -333,8 +354,10 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     });
   },
   dropLocal: (id) => {
+    abortAddInspect(id);
+    if (!get().items.some((item) => item.id === id)) return;
+    bumpMutate();
     set((state) => {
-      if (!state.items.some((item) => item.id === id)) return state;
       const items = state.items.filter((item) => item.id !== id);
       const inspect = omitPrefixed(state.inspect, `${id}::`) ?? state.inspect;
       return {
@@ -353,15 +376,29 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     });
   },
   refresh: async () => {
-    if (refreshLock) return;
+    if (refreshLock) {
+      refreshAgain = true;
+      return;
+    }
     refreshLock = true;
     try {
-      const { items } = await listDocuments();
-      get().replaceAll(items.map(mapDocument));
+      let rounds = 0;
+      do {
+        refreshAgain = false;
+        const snap = mutateGen;
+        const { items } = await listDocuments();
+        if (mutateGen !== snap && rounds < 2) {
+          rounds += 1;
+          refreshAgain = true;
+          continue;
+        }
+        get().replaceAll(items.map(mapDocument));
+      } while (refreshAgain);
     } catch {
       // Connection status is owned by the backend heartbeat.
     } finally {
       refreshLock = false;
+      if (refreshAgain) void get().refresh();
     }
   },
   addDocument: async (input) => {
@@ -415,10 +452,15 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     const room = SOURCE_TOTAL - current.sources.length;
     if (room <= 0) return;
     const slice = files.slice(0, room);
-    if (get().addingToId) return;
+    if (get().addingToId || get().pendingSourceAdd) return;
+    abortAddInspect();
+    const ctl = new AbortController();
+    addInspectCtl = ctl;
+    addInspectDoc = id;
     set({ addingToId: id, pendingDeleteId: null });
     try {
-      const results = await inspectFiles(slice);
+      const results = await inspectFiles(slice, ctl.signal);
+      if (ctl.signal.aborted || !get().items.find((item) => item.id === id)) return;
       const unique: File[] = [];
       const dupFiles: File[] = [];
       const dupResults: InspectResult[] = [];
@@ -438,23 +480,34 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       if (unique.length > 0) {
         await get().addSources(id, unique);
       }
-      if (dupFiles.length > 0) {
+      if (dupFiles.length > 0 && get().items.find((item) => item.id === id)) {
         set({
           pendingSourceAdd: { docId: id, files: dupFiles, results: dupResults },
         });
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
+      if (error instanceof Error && error.name === "AbortError") return;
+      if (!get().items.find((item) => item.id === id)) return;
       await get().addSources(id, slice);
     } finally {
+      if (addInspectDoc === id) {
+        addInspectCtl = null;
+        addInspectDoc = null;
+      }
       if (get().addingToId === id) set({ addingToId: null });
     }
   },
   confirmPendingAdd: async () => {
     const pending = get().pendingSourceAdd;
-    if (!pending) return;
-    set({ pendingSourceAdd: null });
-    await get().addSources(pending.docId, pending.files);
+    if (!pending || get().addingToId) return;
+    set({ pendingSourceAdd: null, addingToId: pending.docId });
+    try {
+      if (!get().items.find((item) => item.id === pending.docId)) return;
+      await get().addSources(pending.docId, pending.files);
+    } finally {
+      if (get().addingToId === pending.docId) set({ addingToId: null });
+    }
   },
   cancelPendingAdd: () => {
     if (get().pendingSourceAdd === null) return;
@@ -464,7 +517,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     const current = get().items.find((item) => item.id === id);
     if (!current) return;
     if (get().pendingViewId === id) return;
-    set({ pendingViewId: id, pendingDeleteId: null });
+    set({ pendingViewId: id, pendingDeleteId: null, pendingCompare: null });
   },
   closeView: () => {
     if (get().pendingViewId === null) return;
@@ -474,7 +527,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     const current = get().items.find((item) => item.id === id);
     if (!current || inFlightDeletes.has(id)) return;
     if (get().pendingDeleteId === id) return;
-    set({ pendingDeleteId: id, pendingViewId: null });
+    set({ pendingDeleteId: id, pendingViewId: null, pendingCompare: null });
   },
   cancelRemove: () => {
     if (get().pendingDeleteId === null) return;

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Plus, Upload, X } from "lucide-react";
+import { AnzscoSelect } from "@/app/components/documents/anzsco-select";
 import { DocTitle } from "@/app/components/documents/doc-title";
 import { inspectFile, suggestTitle } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
@@ -362,6 +363,8 @@ export function AddDocumentDialog({ open, onClose }: Props) {
   const dragCount = useRef(0);
   const busy = useRef(false);
 
+  const erpGen = useRef(0);
+  const erpTouched = useRef(false);
   const [client, setClient] = useState("");
   const [erp, setErp] = useState("");
   const [anzsco, setAnzsco] = useState("");
@@ -377,6 +380,8 @@ export function AddDocumentDialog({ open, onClose }: Props) {
   const reset = useCallback(() => {
     dragCount.current = 0;
     busy.current = false;
+    erpTouched.current = false;
+    const gen = ++erpGen.current;
     setClient("");
     setErp("");
     setAnzsco("");
@@ -386,11 +391,15 @@ export function AddDocumentDialog({ open, onClose }: Props) {
     setOver(false);
     setErpError(false);
     setSubmitting(false);
-    void suggestErp().then((code) => setErp(code));
+    void suggestErp().then((code) => {
+      if (gen !== erpGen.current || erpTouched.current) return;
+      setErp(code);
+    });
   }, []);
 
   useEffect(() => {
     if (!open) {
+      erpGen.current += 1;
       setFiles([]);
       return;
     }
@@ -488,12 +497,14 @@ export function AddDocumentDialog({ open, onClose }: Props) {
 
   if (!open || typeof document === "undefined") return null;
 
+  const inspecting = files.some((file) => inspect[fileKey(file)]?.pending !== false);
   const canSubmit =
     client.trim().length > 0 &&
     erp.trim().length > 0 &&
     files.length > 0 &&
     !erpError &&
-    !submitting;
+    !submitting &&
+    !inspecting;
 
   return createPortal(
     <div
@@ -554,17 +565,13 @@ export function AddDocumentDialog({ open, onClose }: Props) {
                   label="ERP Code"
                   value={erp}
                   onChange={(value) => {
+                    erpTouched.current = true;
                     setErp(value);
                     if (erpError) setErpError(false);
                   }}
                   placeholder="ERP-10001"
                 />
-                <Field
-                  label="ANZSCO"
-                  value={anzsco}
-                  onChange={setAnzsco}
-                  placeholder="261312"
-                />
+                <AnzscoSelect value={anzsco} onChange={setAnzsco} />
               </div>
               <p
                 className={`h-4 text-[11px] ${

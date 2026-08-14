@@ -4,6 +4,7 @@ import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { FileText, FolderOpen, Plus, X } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
+import { findAnzsco, formatAnzsco } from "@/app/lib/anzsco";
 import { formatDateTime } from "@/app/lib/dates";
 import {
   SOURCE_TOTAL,
@@ -25,7 +26,15 @@ function display(value: string | undefined) {
   return next.length > 0 ? next : "—";
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function Fact({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail?: string
+}) {
   return (
     <div className="min-w-0">
       <p className="text-[11px] font-medium tracking-[0.04em] text-muted-soft uppercase">
@@ -34,6 +43,11 @@ function Fact({ label, value }: { label: string; value: string }) {
       <p className="mt-1 text-[13px] leading-5 tracking-[-0.01em] wrap-anywhere text-ink">
         {value}
       </p>
+      {detail ? (
+        <p className="mt-0.5 font-mono text-[12px] tabular-nums text-muted">
+          {detail}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -129,13 +143,16 @@ function SourceCard({
 function ViewBody({ item }: { item: DocumentItem }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const beginAddSources = useDocumentsStore((s) => s.beginAddSources);
-  const adding = useDocumentsStore((s) => s.addingToId === item.id);
+  const adding = useDocumentsStore(
+    (s) => s.addingToId !== null || s.pendingSourceAdd !== null,
+  );
   const canAdd = item.sources.length < SOURCE_TOTAL && !adding;
   const status = statusMeta(item.status);
   const uploaded = item.uploadedAt
     ? formatDateTime(item.uploadedAt) || item.uploaded
     : item.uploaded;
   const heading = display(item.client) !== "—" ? item.client : item.title;
+  const anzsco = findAnzsco(item.anzsco);
 
   return (
     <>
@@ -160,8 +177,12 @@ function ViewBody({ item }: { item: DocumentItem }) {
         <Fact label="Client" value={display(item.client)} />
         <Fact label="User" value={display(item.member || item.uploader)} />
         <Fact label="ERP" value={display(item.erp)} />
+        <Fact
+          label="ANZSCO"
+          value={anzsco?.title || display(formatAnzsco(item.anzsco))}
+          detail={anzsco?.code}
+        />
         <Fact label="Team" value={display(item.team)} />
-        <Fact label="ANZSCO" value={display(item.anzsco)} />
         <Fact label="Uploaded" value={display(uploaded)} />
       </div>
 
