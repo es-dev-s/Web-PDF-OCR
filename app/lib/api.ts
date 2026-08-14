@@ -14,12 +14,16 @@ export class ApiError extends Error {
 
 export type ApiDuplicate = {
   id: string
+  source_id?: string
+  document_id?: string
   title: string
   erp: string
   client?: string
   member?: string
   score: number
   uploaded_at: string
+  file_url?: string
+  content_type?: string
   kind?: string
   uniqueness?: SourceUniqueness
 };

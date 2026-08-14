@@ -21,8 +21,6 @@ const SOURCE_COLS =
 
 const ACTION_SLOT = "flex w-full min-w-0 items-center justify-end gap-1";
 
-const EMPTY_IDS: string[] = [];
-
 const HEADER_CELL =
   "flex h-9 min-w-0 items-center text-[11px] font-medium tracking-[0.05em] text-muted uppercase";
 
@@ -310,7 +308,11 @@ const SourceRow = memo(function SourceRow({
     source ? s.inspect[inspectKey(docId, source.id)] === true : false,
   );
   const comparing = useDocumentsStore((s) =>
-    source ? (s.compareByDoc[docId] ?? EMPTY_IDS).includes(source.id) : false,
+    Boolean(
+      source &&
+        s.pendingCompare?.docId === docId &&
+        s.pendingCompare.sourceId === source.id,
+    ),
   );
   return (
     <>
@@ -406,7 +408,7 @@ function DocumentSources({ item }: { item: DocumentItem }) {
   }, [item.sources.length]);
 
   const onCompare = useCallback((sourceId: string) => {
-    useDocumentsStore.getState().toggleCompare(item.id, sourceId);
+    useDocumentsStore.getState().openCompare(item.id, sourceId);
   }, [item.id]);
 
   const onInspect = useCallback((sourceId: string) => {

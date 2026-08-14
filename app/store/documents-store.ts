@@ -17,6 +17,8 @@ import { useUserStore } from "@/app/store/user-store";
 
 export type DuplicateMatch = {
   id: string
+  sourceId?: string
+  documentId?: string
   title: string
   erp: string
   client?: string
@@ -24,6 +26,8 @@ export type DuplicateMatch = {
   score: number
   uploaded: string
   uniqueness: SourceUniqueness
+  fileUrl?: string
+  contentType?: string
 };
 
 export type SourceFile = {
@@ -65,6 +69,11 @@ export type NewDocumentInput = {
   titles?: string[]
 };
 
+export type PendingCompare = {
+  docId: string
+  sourceId: string
+};
+
 export type PendingSourceAdd = {
   docId: string
   files: File[]
@@ -77,7 +86,7 @@ type DocumentsState = {
   visibleItems: DocumentItem[]
   expandedId: string | null
   inspect: Record<string, true>
-  compareByDoc: Record<string, string[]>
+  pendingCompare: PendingCompare | null
   pendingDeleteId: string | null
   pendingViewId: string | null
   pendingSourceAdd: PendingSourceAdd | null
@@ -85,7 +94,8 @@ type DocumentsState = {
   setQuery: (query: string) => void
   toggleExpanded: (id: string) => void
   toggleInspect: (docId: string, sourceId: string) => void
-  toggleCompare: (docId: string, sourceId: string) => void
+  openCompare: (docId: string, sourceId: string) => void
+  closeCompare: () => void
   replaceAll: (items: DocumentItem[]) => void
   upsert: (item: DocumentItem) => void
   dropLocal: (id: string) => void
@@ -168,6 +178,8 @@ function mapSource(source: ApiSource): SourceFile {
     fileUrl: source.file_url,
     duplicates: (source.duplicates ?? []).map((match) => ({
       id: match.id,
+      sourceId: match.source_id,
+      documentId: match.document_id,
       title: match.title,
       erp: match.erp,
       client: match.client,
@@ -175,6 +187,8 @@ function mapSource(source: ApiSource): SourceFile {
       score: match.score,
       uploaded: formatDateTime(match.uploaded_at),
       uniqueness: parseUniqueness(match.uniqueness),
+      fileUrl: match.file_url,
+      contentType: match.content_type,
     })),
   };
 }
@@ -212,7 +226,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   visibleItems: EMPTY,
   expandedId: null,
   inspect: {},
-  compareByDoc: {},
+  pendingCompare: null,
   pendingDeleteId: null,
   pendingViewId: null,
   pendingSourceAdd: null,
@@ -251,29 +265,16 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       return { inspect: { ...state.inspect, [key]: true } };
     });
   },
-  toggleCompare: (docId, sourceId) => {
-    set((state) => {
-      const current = state.compareByDoc[docId] ?? [];
-      const exists = current.includes(sourceId);
-      const next = exists
-        ? current.filter((id) => id !== sourceId)
-        : [...current, sourceId].slice(-2);
-      if (
-        next.length === current.length &&
-        next.every((id, index) => id === current[index])
-      ) {
-        return state;
-      }
-      if (next.length === 0) {
-        if (!(docId in state.compareByDoc)) return state;
-        const rest = { ...state.compareByDoc };
-        delete rest[docId];
-        return { compareByDoc: rest };
-      }
-      return {
-        compareByDoc: { ...state.compareByDoc, [docId]: next },
-      };
-    });
+  openCompare: (docId, sourceId) => {
+    const current = get().items.find((item) => item.id === docId);
+    if (!current || !current.sources.some((source) => source.id === sourceId)) return;
+    const pending = get().pendingCompare;
+    if (pending?.docId === docId && pending.sourceId === sourceId) return;
+    set({ pendingCompare: { docId, sourceId }, pendingDeleteId: null });
+  },
+  closeCompare: () => {
+    if (get().pendingCompare === null) return;
+    set({ pendingCompare: null });
   },
   replaceAll: (items) => {
     set((state) => {
@@ -296,12 +297,22 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         next.some((item) => item.id === state.pendingViewId)
           ? state.pendingViewId
           : null;
+      const pendingCompare =
+        state.pendingCompare &&
+        next.some(
+          (item) =>
+            item.id === state.pendingCompare?.docId &&
+            item.sources.some((source) => source.id === state.pendingCompare?.sourceId),
+        )
+          ? state.pendingCompare
+          : null;
       return {
         items: next,
         visibleItems: filterItems(next, state.query),
         expandedId,
         pendingDeleteId,
         pendingViewId,
+        pendingCompare,
       };
     });
   },
@@ -325,8 +336,6 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     set((state) => {
       if (!state.items.some((item) => item.id === id)) return state;
       const items = state.items.filter((item) => item.id !== id);
-      const compareByDoc = { ...state.compareByDoc };
-      delete compareByDoc[id];
       const inspect = omitPrefixed(state.inspect, `${id}::`) ?? state.inspect;
       return {
         items: items.length === 0 ? EMPTY : items,
@@ -335,10 +344,11 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         pendingDeleteId:
           state.pendingDeleteId === id ? null : state.pendingDeleteId,
         pendingViewId: state.pendingViewId === id ? null : state.pendingViewId,
+        pendingCompare:
+          state.pendingCompare?.docId === id ? null : state.pendingCompare,
         pendingSourceAdd:
           state.pendingSourceAdd?.docId === id ? null : state.pendingSourceAdd,
         inspect,
-        compareByDoc,
       };
     });
   },

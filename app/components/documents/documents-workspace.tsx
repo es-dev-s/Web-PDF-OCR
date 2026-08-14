@@ -1,5 +1,6 @@
 "use client";
 
+import { CompareDocumentDialog } from "@/app/components/documents/compare-document-dialog";
 import { DeleteDocumentDialog } from "@/app/components/documents/delete-document-dialog";
 import { DocumentsTable } from "@/app/components/documents/documents-table";
 import { DocumentsToolbar } from "@/app/components/documents/documents-toolbar";
@@ -12,6 +13,7 @@ export function DocumentsWorkspace() {
       <DocumentsToolbar />
       <DocumentsTable />
       <ViewDocumentDialog />
+      <CompareDocumentDialog />
       <DuplicateAddDialog />
       <DeleteDocumentDialog />
     </div>
