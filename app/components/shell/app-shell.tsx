@@ -1,0 +1,31 @@
+"use client";
+
+import { useBackendSync } from "@/app/hooks/use-backend-sync";
+import { useDataSync } from "@/app/hooks/use-data-sync";
+import { BrandMark } from "@/app/components/shell/brand-mark";
+import { Navbar } from "@/app/components/shell/navbar";
+import { Sidebar } from "@/app/components/shell/sidebar";
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  useBackendSync();
+  useDataSync();
+
+  return (
+    <div className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-surface select-none">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute bottom-0 left-[var(--sidebar-w)] top-0 z-30 w-px bg-[var(--border)]"
+      />
+      <div className="flex h-[var(--navbar-h)] w-full shrink-0 items-stretch border-b border-[var(--border)] bg-surface">
+        <BrandMark />
+        <Navbar />
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <Sidebar />
+        <main className="shell-scroll min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain bg-surface select-text">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
