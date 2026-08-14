@@ -80,6 +80,13 @@ export function parseUniqueness(value: string | undefined): SourceUniqueness {
   return "unique";
 }
 
+export function isHashPending(
+  status: DocumentStatus,
+  source: { uniqueness: SourceUniqueness; score: number | null },
+) {
+  return status === "processing" && source.uniqueness === "unique" && source.score == null;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes < 1024) return `${Math.round(bytes)} B`;

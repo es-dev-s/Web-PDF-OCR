@@ -142,6 +142,8 @@ function useSourceTitles(open: boolean, files: File[]) {
 
 type InspectEntry = {
   pending: boolean
+  failed?: boolean
+  server: "unique" | "duplicate"
   uniqueness: "unique" | "duplicate"
   digest?: string
   erp?: string
@@ -151,6 +153,19 @@ type InspectEntry = {
   uploaded?: string
   intra?: boolean
 };
+
+async function inspectWithRetry(file: File, signal: AbortSignal) {
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await inspectFile(file, signal);
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+      last = error;
+    }
+  }
+  throw last;
+}
 
 function useSourceInspect(open: boolean, files: File[]) {
   const [inspect, setInspect] = useState<Record<string, InspectEntry>>({});
@@ -164,19 +179,18 @@ function useSourceInspect(open: boolean, files: File[]) {
 
   const applyIntra = (current: Record<string, InspectEntry>) => {
     const seen = new Map<string, string>();
-    const next = { ...current };
+    const next: Record<string, InspectEntry> = {};
     for (const file of filesRef.current) {
       const key = fileKey(file);
-      const entry = next[key];
-      if (!entry || entry.pending || !entry.digest) continue;
-      const first = seen.get(entry.digest);
-      if (!first) {
+      const entry = current[key];
+      if (!entry) continue;
+      next[key] = { ...entry, uniqueness: entry.server, intra: false };
+      if (entry.pending || entry.failed || !entry.digest) continue;
+      if (!seen.has(entry.digest)) {
         seen.set(entry.digest, key);
         continue;
       }
-      if (entry.uniqueness === "unique") {
-        next[key] = { ...entry, uniqueness: "duplicate", intra: true };
-      }
+      next[key] = { ...next[key], uniqueness: "duplicate", intra: true };
     }
     return next;
   };
@@ -188,16 +202,20 @@ function useSourceInspect(open: boolean, files: File[]) {
       const ac = new AbortController();
       abortByKey.current.set(key, ac);
       active.current += 1;
-      void inspectFile(file, ac.signal)
+      void inspectWithRetry(file, ac.signal)
         .then((data) => {
           if (ac.signal.aborted) return;
           const match = data.matches[0];
+          const server =
+            data.ok && data.uniqueness === "duplicate" ? "duplicate" : "unique";
           setInspect((prev) =>
             applyIntra({
               ...prev,
               [key]: {
                 pending: false,
-                uniqueness: data.uniqueness === "duplicate" ? "duplicate" : "unique",
+                failed: !data.ok,
+                server,
+                uniqueness: server,
                 digest: data.digest,
                 erp: match?.erp,
                 member: match?.member,
@@ -213,7 +231,12 @@ function useSourceInspect(open: boolean, files: File[]) {
           setInspect((prev) =>
             applyIntra({
               ...prev,
-              [key]: { pending: false, uniqueness: "unique" },
+              [key]: {
+                pending: false,
+                failed: true,
+                server: "unique",
+                uniqueness: "unique",
+              },
             }),
           );
         })
@@ -257,7 +280,11 @@ function useSourceInspect(open: boolean, files: File[]) {
       const next: Record<string, InspectEntry> = {};
       for (const file of files) {
         const key = fileKey(file);
-        next[key] = prev[key] ?? { pending: true, uniqueness: "unique" };
+        next[key] = prev[key] ?? {
+          pending: true,
+          server: "unique",
+          uniqueness: "unique",
+        };
       }
       return applyIntra(next);
     });
@@ -615,6 +642,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
                         : entry?.value || file.name;
                       const check = inspect[fileKey(file)];
                       const checking = !check || check.pending;
+                      const failed = Boolean(check?.failed);
                       const uniqueMeta = uniquenessMeta(
                         check?.uniqueness === "duplicate" ? "duplicate" : "unique",
                       );
@@ -652,6 +680,10 @@ export function AddDocumentDialog({ open, onClose }: Props) {
                                 <span className="title-pulse text-[11px] text-muted">
                                   Checking uniqueness…
                                 </span>
+                              ) : failed ? (
+                                <span className="text-[11px] text-muted">
+                                  Couldn’t verify yet
+                                </span>
                               ) : (
                                 <span
                                   className={`inline-flex h-5 items-center rounded-full px-1.5 text-[10px] font-medium ${uniqueMeta.className}`}
@@ -660,7 +692,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
                                 </span>
                               )}
                             </div>
-                            {!checking && check?.uniqueness === "duplicate" ? (
+                            {!checking && !failed && check?.uniqueness === "duplicate" ? (
                               <p className="mt-1 text-[11px] leading-4 text-muted">
                                 {matchLine || "Matches an existing source"}
                                 {when ? ` · ${when}` : ""}

@@ -418,12 +418,12 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         const digest = result.digest ?? "";
         const intra = digest !== "" && seen.has(digest);
         if (digest) seen.add(digest);
-        if (!intra && result.uniqueness !== "duplicate") {
-          unique.push(slice[i]);
+        if (result.ok && (intra || result.uniqueness === "duplicate")) {
+          dupFiles.push(slice[i]);
+          dupResults.push(result);
           continue;
         }
-        dupFiles.push(slice[i]);
-        dupResults.push(result);
+        unique.push(slice[i]);
       }
       if (unique.length > 0) {
         await get().addSources(id, unique);
@@ -433,7 +433,8 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
           pendingSourceAdd: { docId: id, files: dupFiles, results: dupResults },
         });
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
       await get().addSources(id, slice);
     } finally {
       if (get().addingToId === id) set({ addingToId: null });

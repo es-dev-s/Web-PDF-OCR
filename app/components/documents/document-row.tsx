@@ -4,7 +4,7 @@ import { memo, useCallback, useRef } from "react";
 import { Eye, FolderOpen, GitCompare, Link2, Plus, Trash2 } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
 import { IconBtn } from "@/app/components/documents/icon-btn";
-import { SOURCE_TOTAL, statusMeta, uniquenessMeta, type SourceUniqueness, type StatusTone } from "@/app/lib/files";
+import { SOURCE_TOTAL, isHashPending, statusMeta, uniquenessMeta, type SourceUniqueness, type StatusTone } from "@/app/lib/files";
 import {
   inspectKey,
   useDocumentsStore,
@@ -17,7 +17,7 @@ export const COLS =
   "grid-cols-[minmax(10rem,1.45fr)_minmax(0,0.85fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_auto]";
 
 const SOURCE_COLS =
-  "grid-cols-[minmax(0,1.8fr)_9.5rem_4.25rem_6.75rem_9.5rem]";
+  "grid-cols-[minmax(0,1.5fr)_minmax(0,0.95fr)_9.5rem_4.25rem_6.75rem_9.5rem]";
 
 const ACTION_SLOT = "flex w-full min-w-0 items-center justify-end gap-1";
 
@@ -129,11 +129,21 @@ function SourceHeader() {
   return (
     <div className={`grid ${SOURCE_COLS} gap-x-4 px-4`} role="row">
       <div className={SOURCE_HEADER_CELL}>Title</div>
+      <div className={SOURCE_HEADER_CELL}>Client</div>
       <div className={SOURCE_HEADER_CELL}>Uploaded</div>
       <div className={SOURCE_HEADER_CELL}>Score</div>
       <div className={SOURCE_HEADER_CELL}>Status</div>
       <div className={`${SOURCE_HEADER_CELL} justify-end`}>Action</div>
     </div>
+  );
+}
+
+function ClientCell({ value }: { value?: string }) {
+  const name = value?.trim() ?? "";
+  return (
+    <p className="w-full truncate text-[13px] text-ink">
+      {name.length > 0 ? name : "—"}
+    </p>
   );
 }
 
@@ -208,12 +218,21 @@ function MatchCountButton({
 function SourceStatus({
   source,
   inspecting,
+  pendingHash,
   onInspect,
 }: {
   source: SourceFile
   inspecting: boolean
+  pendingHash: boolean
   onInspect: () => void
 }) {
+  if (pendingHash) {
+    return (
+      <span className={`${PILL} ${statusMeta("processing").className}`}>
+        Checking
+      </span>
+    );
+  }
   if (source.uniqueness === "unique") {
     return <UniquenessPill value="unique" />;
   }
@@ -244,6 +263,9 @@ function DuplicateDetails({ matches }: { matches: DuplicateMatch[] }) {
             </div>
           </div>
           <div className={SOURCE_BODY_CELL}>
+            <ClientCell value={match.client} />
+          </div>
+          <div className={SOURCE_BODY_CELL}>
             <p className="w-full truncate text-[12px] tabular-nums text-muted">
               {match.uploaded}
             </p>
@@ -268,14 +290,18 @@ function DuplicateDetails({ matches }: { matches: DuplicateMatch[] }) {
 const SourceRow = memo(function SourceRow({
   docId,
   source,
+  client,
   canAdd,
+  pendingHash,
   onAdd,
   onCompare,
   onInspect,
 }: {
   docId: string
   source: SourceFile | null
+  client: string
   canAdd: boolean
+  pendingHash: boolean
   onAdd: () => void
   onCompare: (sourceId: string) => void
   onInspect: (sourceId: string) => void
@@ -305,6 +331,11 @@ const SourceRow = memo(function SourceRow({
           )}
         </div>
         <div className={SOURCE_BODY_CELL}>
+          {source ? <ClientCell value={client} /> : (
+            <span className="w-full truncate text-[13px] text-muted-soft">—</span>
+          )}
+        </div>
+        <div className={SOURCE_BODY_CELL}>
           <p className="w-full truncate text-[12px] tabular-nums text-muted">
             {source ? source.uploaded : "—"}
           </p>
@@ -319,6 +350,7 @@ const SourceRow = memo(function SourceRow({
             <SourceStatus
               source={source}
               inspecting={inspecting}
+              pendingHash={pendingHash}
               onInspect={() => onInspect(source.id)}
             />
           ) : null}
@@ -401,7 +433,9 @@ function DocumentSources({ item }: { item: DocumentItem }) {
           key={source?.id ?? `empty-${item.id}-${index}`}
           docId={item.id}
           source={source}
+          client={item.client}
           canAdd={canAdd}
+          pendingHash={source ? isHashPending(item.status, source) : false}
           onAdd={onAdd}
           onCompare={onCompare}
           onInspect={onInspect}

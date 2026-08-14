@@ -202,19 +202,13 @@ async function postFile<T>(
   return (await response.json()) as T;
 }
 
-function isConfidentMatch(match: InspectMatch): boolean {
-  const score = match.score ?? 0;
-  if (match.kind === "exact" || score >= 99) return true;
-  if (match.kind === "visual") return score >= 95;
-  return score >= 96.5;
-}
-
 export async function inspectFile(file: File, signal?: AbortSignal): Promise<InspectResult> {
   const data = await postFile<InspectResult>("/v1/documents/inspect", file, signal);
-  const matches = (data.ok === false ? [] : data.matches ?? []).filter(isConfidentMatch);
+  const ok = data.ok !== false;
+  const matches = ok ? data.matches ?? [] : [];
   return {
-    ok: data.ok !== false,
-    uniqueness: matches.length > 0 ? "duplicate" : "unique",
+    ok,
+    uniqueness: ok && data.uniqueness === "duplicate" && matches.length > 0 ? "duplicate" : "unique",
     filename: data.filename,
     digest: data.digest,
     matches,
@@ -231,14 +225,19 @@ export async function inspectFiles(
     while (cursor < files.length) {
       const index = cursor;
       cursor += 1;
-      try {
-        out[index] = await inspectFile(files[index], signal);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          throw error;
+      let last: InspectResult = emptyInspect();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          last = await inspectFile(files[index], signal);
+          if (last.ok) break;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw error;
+          }
+          last = emptyInspect();
         }
-        out[index] = emptyInspect();
       }
+      out[index] = last;
     }
   };
   await Promise.all([worker(), worker()]);

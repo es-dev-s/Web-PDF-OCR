@@ -9,6 +9,7 @@ import {
   SOURCE_TOTAL,
   fileKind,
   formatBytes,
+  isHashPending,
   statusMeta,
   uniquenessMeta,
 } from "@/app/lib/files";
@@ -37,14 +38,25 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SourceCard({ source }: { source: SourceFile }) {
+function SourceCard({
+  source,
+  client,
+  pendingHash,
+}: {
+  source: SourceFile
+  client: string
+  pendingHash: boolean
+}) {
   const kind = fileKind(source.contentType);
   const size =
     typeof source.sizeBytes === "number" ? formatBytes(source.sizeBytes) : null;
-  const unique = uniquenessMeta(source.uniqueness);
+  const unique = pendingHash
+    ? { label: "Checking" }
+    : uniquenessMeta(source.uniqueness);
   const meta = [
     kind,
     size,
+    client.trim() || null,
     unique.label,
     source.score !== null ? source.score.toFixed(1) : null,
   ]
@@ -95,7 +107,7 @@ function SourceCard({ source }: { source: SourceFile }) {
                     className="text-[12px] text-muted"
                   />
                   <p className="mt-0.5 truncate text-[11px] text-muted-soft">
-                    {[match.erp, match.member, match.client]
+                    {[match.client, match.erp, match.member]
                       .filter((part) => part && part.trim())
                       .join(" · ")}
                   </p>
@@ -182,7 +194,12 @@ function ViewBody({ item }: { item: DocumentItem }) {
           ) : (
             <ul>
               {item.sources.map((source) => (
-                <SourceCard key={source.id} source={source} />
+                <SourceCard
+                  key={source.id}
+                  source={source}
+                  client={item.client}
+                  pendingHash={isHashPending(item.status, source)}
+                />
               ))}
             </ul>
           )}
