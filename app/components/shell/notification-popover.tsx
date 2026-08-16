@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { ShellPopover } from "@/app/components/shell/shell-popover";
 import {
   unreadCount,
@@ -23,6 +24,7 @@ export function NotificationPopover({
   onClose,
   anchorRef,
 }: Props) {
+  const router = useRouter();
   const items = useNotificationStore((s) => s.items);
   const markRead = useNotificationStore((s) => s.markRead);
   const markAllRead = useNotificationStore((s) => s.markAllRead);
@@ -55,7 +57,7 @@ export function NotificationPopover({
           Clear
         </button>
       </div>
-      <div className="max-h-[min(320px,70vh)] overflow-y-auto">
+      <div className="max-h-[min(360px,70vh)] overflow-y-auto">
         {items.length === 0 ? (
           <p className="px-3.5 py-8 text-center text-[13px] text-muted">
             You&apos;re all caught up.
@@ -66,7 +68,11 @@ export function NotificationPopover({
               <li key={item.id}>
                 <button
                   type="button"
-                  onClick={() => markRead(item.id)}
+                  onClick={() => {
+                    markRead(item.id);
+                    onClose();
+                    router.push(item.href);
+                  }}
                   className="flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-surface-muted focus-visible:bg-surface-muted"
                 >
                   <span
@@ -84,9 +90,18 @@ export function NotificationPopover({
                         {item.time}
                       </span>
                     </span>
-                    <span className="mt-0.5 block truncate text-[12px] text-muted">
+                    <span className="mt-0.5 block text-[12px] leading-4 text-muted">
                       {item.detail}
                     </span>
+                    {item.kind === "review" ? (
+                      <span className="mt-1.5 inline-flex h-5 items-center rounded-full bg-[#f4efe8] px-1.5 text-[10px] font-medium text-[#8a5a2b]">
+                        Open Review
+                      </span>
+                    ) : item.kind === "review_pending" ? (
+                      <span className="mt-1.5 inline-flex h-5 items-center rounded-full bg-[#f4efe8] px-1.5 text-[10px] font-medium text-[#8a5a2b]">
+                        Pending
+                      </span>
+                    ) : null}
                   </span>
                 </button>
               </li>

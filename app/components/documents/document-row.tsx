@@ -386,7 +386,10 @@ function DocumentSources({ item }: { item: DocumentItem }) {
   const adding = useDocumentsStore(
     (s) => s.addingToId !== null || s.pendingSourceAdd !== null,
   );
-  const canAdd = item.sources.length < SOURCE_TOTAL && !adding;
+  const canAdd =
+    item.status !== "pending_review" &&
+    item.sources.length < SOURCE_TOTAL &&
+    !adding;
 
   const onAdd = useCallback(() => {
     if (item.sources.length >= SOURCE_TOTAL) return;

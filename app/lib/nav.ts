@@ -13,6 +13,11 @@ export const NAV_PRIMARY: NavItem[] = [
   { href: "/user", label: "User", icon: CircleUserRound },
 ];
 
+export function navForRole(role: string): NavItem[] {
+  if (role === "admin") return NAV_PRIMARY;
+  return NAV_PRIMARY.filter((item) => item.href !== "/review");
+}
+
 export const NAV_FOOTER: NavItem[] = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];

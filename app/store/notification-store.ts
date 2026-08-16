@@ -13,7 +13,27 @@ export type AppNotification = {
   detail: string
   time: string
   read: boolean
+  kind: string
+  href: string
 };
+
+export function notificationHref(kind: string | undefined): string {
+  if (kind === "review") return "/review";
+  return "/documents";
+}
+
+export function mapNotification(raw: ApiNotification): AppNotification {
+  const kind = raw.kind ?? "";
+  return {
+    id: raw.id,
+    title: raw.title,
+    detail: raw.detail,
+    time: formatRelative(raw.created_at),
+    read: raw.read,
+    kind,
+    href: notificationHref(kind),
+  };
+}
 
 type NotificationState = {
   items: AppNotification[]
@@ -25,16 +45,6 @@ type NotificationState = {
 };
 
 const EMPTY: AppNotification[] = [];
-
-export function mapNotification(raw: ApiNotification): AppNotification {
-  return {
-    id: raw.id,
-    title: raw.title,
-    detail: raw.detail,
-    time: formatRelative(raw.created_at),
-    read: raw.read,
-  };
-}
 
 export const useNotificationStore = create<NotificationState>((set, get) => ({
   items: EMPTY,

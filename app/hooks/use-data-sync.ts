@@ -16,6 +16,7 @@ import {
   mapNotification,
   useNotificationStore,
 } from "@/app/store/notification-store";
+import { useUserStore } from "@/app/store/user-store";
 
 export function useDataSync() {
   const status = useBackendStore((s) => s.status);
@@ -55,7 +56,10 @@ export function useDataSync() {
           return;
         }
         if (payload.type === "notification.created" || payload.type === "notification.updated") {
-          upsertNote(mapNotification(payload.data as ApiNotification));
+          const note = payload.data as ApiNotification;
+          const role = useUserStore.getState().role;
+          if (note.audience === "admin" && role !== "admin") return;
+          upsertNote(mapNotification(note));
           return;
         }
         if (payload.type === "notification.cleared") {

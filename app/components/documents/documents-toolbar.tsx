@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, RotateCw, Search } from "lucide-react";
 import { AddDocumentDialog } from "@/app/components/documents/add-document-dialog";
 import {
-  selectVisibleCount,
   useDocumentsStore,
 } from "@/app/store/documents-store";
+import { useUserStore } from "@/app/store/user-store";
 
 function DocumentSearch() {
   const query = useDocumentsStore((s) => s.query);
@@ -34,7 +34,12 @@ function DocumentSearch() {
 }
 
 function DocumentRowCount() {
-  const count = useDocumentsStore(selectVisibleCount);
+  const items = useDocumentsStore((s) => s.visibleItems);
+  const role = useUserStore((s) => s.role);
+  const count =
+    role === "admin"
+      ? items.filter((item) => item.status !== "pending_review").length
+      : items.length;
 
   return (
     <span className="inline-flex h-8 w-[7.5rem] shrink-0 items-center text-[12px] leading-none tabular-nums text-muted">

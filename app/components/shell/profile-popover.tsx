@@ -28,7 +28,7 @@ export function ProfilePopover({
 
   const onLogOut = () => {
     onClose();
-    signOut();
+    void signOut();
   };
 
   return (

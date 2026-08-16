@@ -2,12 +2,18 @@
 
 import { DocumentsTableHeader, DocumentRow } from "@/app/components/documents/document-row";
 import { useDocumentsStore } from "@/app/store/documents-store";
+import { useUserStore } from "@/app/store/user-store";
 
 function DocumentsTableBody() {
   const items = useDocumentsStore((s) => s.visibleItems);
   const query = useDocumentsStore((s) => s.query);
+  const role = useUserStore((s) => s.role);
+  const rows =
+    role === "admin"
+      ? items.filter((item) => item.status !== "pending_review")
+      : items;
 
-  if (items.length === 0) {
+  if (rows.length === 0) {
     return (
       <p className="px-4 py-10 text-center text-[13px] text-muted">
         {query.trim()
@@ -19,7 +25,7 @@ function DocumentsTableBody() {
 
   return (
     <div role="rowgroup">
-      {items.map((item) => (
+      {rows.map((item) => (
         <DocumentRow key={item.id} item={item} />
       ))}
     </div>

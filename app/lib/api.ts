@@ -62,6 +62,9 @@ export type ApiNotification = {
   detail: string
   read: boolean
   created_at: string
+  kind?: string
+  audience?: string
+  document_id?: string
 };
 
 export type LiveEvent = {
@@ -105,10 +108,17 @@ function retryAfterMs(response: Response, fallback: number) {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let delay = 1000;
   for (let attempt = 0; attempt < 5; attempt += 1) {
+    const headers = new Headers(init?.headers);
     const response = await fetch(url(path), {
       cache: "no-store",
+      credentials: "include",
       ...init,
+      headers,
     });
+    if (response.status === 401 && path !== "/v1/auth/login" && path !== "/v1/auth/me") {
+      const { onUnauthorized } = await import("@/app/store/user-store");
+      onUnauthorized();
+    }
     if (response.status === 503) {
       const error = await parseError(response);
       if (error.code === "busy" && attempt < 4) {
@@ -168,6 +178,70 @@ export function markAllNotificationsRead() {
   return request<{ ok: boolean }>("/v1/notifications/read-all", {
     method: "POST",
   });
+}
+
+export type AuthRole = "admin" | "member";
+
+export type ApiUser = {
+  id: string
+  email: string
+  name: string
+  role: AuthRole
+  disabled?: boolean
+  created_at?: string
+};
+
+export function login(email: string, password: string) {
+  return request<{ user: ApiUser }>("/v1/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function logout() {
+  return request<{ ok: boolean }>("/v1/auth/logout", { method: "POST" });
+}
+
+export function currentUser() {
+  return request<{ user: ApiUser }>("/v1/auth/me");
+}
+
+export function listUsers() {
+  return request<{ items: ApiUser[] }>("/v1/users");
+}
+
+export function createUser(input: {
+  name: string
+  email: string
+  password: string
+  role: AuthRole
+}) {
+  return request<{ user: ApiUser }>("/v1/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function setUserDisabled(id: string, disabled: boolean) {
+  return request<{ ok: boolean }>(`/v1/users/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ disabled }),
+  });
+}
+
+export function listReviews() {
+  return request<{ items: ApiDocument[] }>("/v1/reviews");
+}
+
+export function approveReview(id: string) {
+  return request<ApiDocument>(`/v1/reviews/${id}/approve`, { method: "POST" });
+}
+
+export function rejectReview(id: string) {
+  return request<{ ok: boolean }>(`/v1/reviews/${id}/reject`, { method: "POST" });
 }
 
 export function eventsUrl() {
@@ -241,6 +315,7 @@ async function postFile<T>(
       method: "POST",
       body: form,
       cache: "no-store",
+      credentials: "include",
       signal: combined,
     });
     if (response.status === 503) {

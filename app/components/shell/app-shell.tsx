@@ -2,11 +2,14 @@
 
 import { useBackendSync } from "@/app/hooks/use-backend-sync";
 import { useDataSync } from "@/app/hooks/use-data-sync";
+import { LoginScreen } from "@/app/components/auth/login-screen";
 import { BrandMark } from "@/app/components/shell/brand-mark";
 import { Navbar } from "@/app/components/shell/navbar";
 import { Sidebar } from "@/app/components/shell/sidebar";
+import { useUserStore } from "@/app/store/user-store";
+import { useEffect } from "react";
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+function AuthedShell({ children }: { children: React.ReactNode }) {
   useBackendSync();
   useDataSync();
 
@@ -28,4 +31,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
     </div>
   );
+}
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const ready = useUserStore((s) => s.ready);
+  const signedIn = useUserStore((s) => s.signedIn);
+  const hydrate = useUserStore((s) => s.hydrate);
+
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
+
+  if (!ready) {
+    return (
+      <div className="flex h-full min-h-0 w-full flex-1 items-center justify-center bg-canvas text-[13px] text-muted">
+        Loading…
+      </div>
+    );
+  }
+  if (!signedIn) {
+    return <LoginScreen />;
+  }
+  return <AuthedShell>{children}</AuthedShell>;
 }

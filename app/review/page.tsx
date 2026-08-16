@@ -1,3 +1,5 @@
+import { ReviewWorkspace } from "@/app/components/review/review-workspace";
+
 export default function ReviewPage() {
-  return null;
+  return <ReviewWorkspace />;
 }

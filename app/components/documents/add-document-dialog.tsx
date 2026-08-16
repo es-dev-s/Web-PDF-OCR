@@ -16,7 +16,7 @@ import {
   suggestErp,
   useDocumentsStore,
 } from "@/app/store/documents-store";
-import { useUserStore } from "@/app/store/user-store";
+import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 const ACCEPT = ".pdf,application/pdf,image/*";
 
@@ -360,6 +360,8 @@ type Props = {
 export function AddDocumentDialog({ open, onClose }: Props) {
   const titleId = useId();
   const addDocument = useDocumentsStore((s) => s.addDocument);
+  const role = useUserStore((s) => s.role);
+  const admin = isAdmin(role);
   const firstRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const dragCount = useRef(0);
@@ -584,12 +586,25 @@ export function AddDocumentDialog({ open, onClose }: Props) {
               </p>
             </div>
             <TeamSelect value={team} onChange={setTeam} />
-            <Field
-              label="Member"
-              value={member}
-              onChange={setMember}
-              placeholder="Member"
-            />
+            {admin ? (
+              <Field
+                label="Member"
+                value={member}
+                onChange={setMember}
+                placeholder="Member"
+              />
+            ) : (
+              <label className="block min-w-0">
+                <span className="mb-1.5 block text-[12px] font-medium text-muted">
+                  Member
+                </span>
+                <input
+                  value={member}
+                  readOnly
+                  className="h-9 w-full rounded-xl border border-[var(--border)] bg-canvas px-3 text-[13px] text-ink outline-none"
+                />
+              </label>
+            )}
           </div>
 
           <div>

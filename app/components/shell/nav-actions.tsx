@@ -4,22 +4,23 @@ import { Bell } from "lucide-react";
 import { NotificationPopover } from "@/app/components/shell/notification-popover";
 import { ProfilePopover } from "@/app/components/shell/profile-popover";
 import { useChromeMenu } from "@/app/hooks/use-chrome-menu";
-import { selectHasUnread, useNotificationStore } from "@/app/store/notification-store";
+import { unreadCount, useNotificationStore } from "@/app/store/notification-store";
 import { useUserStore } from "@/app/store/user-store";
 
 export function NotificationButton() {
   const { anchorRef, open, place, close, toggle } = useChromeMenu(
     "notifications",
-    320,
+    360,
   );
-  const hasUnread = useNotificationStore(selectHasUnread);
+  const unread = useNotificationStore((s) => unreadCount(s.items));
+  const hasUnread = unread > 0;
 
   return (
     <>
       <button
         ref={anchorRef}
         type="button"
-        aria-label={hasUnread ? "Notifications, unread" : "Notifications"}
+        aria-label={hasUnread ? `Notifications, ${unread} unread` : "Notifications"}
         aria-expanded={open}
         aria-haspopup="dialog"
         title="Notifications"
@@ -27,12 +28,16 @@ export function NotificationButton() {
         className="relative flex size-8 shrink-0 items-center justify-center rounded-lg text-muted outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:text-ink focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
       >
         <Bell className="size-4" strokeWidth={1.75} absoluteStrokeWidth />
-        <span
-          className={`absolute top-[7px] right-[8px] size-[6px] rounded-full bg-[#007aff] ring-2 ring-surface ${
-            hasUnread ? "opacity-100" : "opacity-0"
-          }`}
-          aria-hidden
-        />
+        {unread > 0 ? (
+          <span className="absolute top-[3px] right-[3px] flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[#007aff] px-0.5 text-[9px] font-semibold leading-none text-white ring-2 ring-surface">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        ) : (
+          <span
+            className="absolute top-[7px] right-[8px] size-[6px] rounded-full bg-transparent ring-2 ring-surface"
+            aria-hidden
+          />
+        )}
       </button>
       <NotificationPopover
         open={open}

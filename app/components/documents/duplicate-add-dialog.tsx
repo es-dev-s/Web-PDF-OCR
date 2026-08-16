@@ -7,6 +7,7 @@ import { DocTitle } from "@/app/components/documents/doc-title";
 import type { InspectMatch, InspectResult } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
 import { useDocumentsStore } from "@/app/store/documents-store";
+import { useUserStore } from "@/app/store/user-store";
 
 function display(value: string | undefined) {
   const next = value?.trim() ?? "";
@@ -84,6 +85,8 @@ export function DuplicateAddDialog() {
   const pending = useDocumentsStore((s) => s.pendingSourceAdd);
   const confirmPendingAdd = useDocumentsStore((s) => s.confirmPendingAdd);
   const cancelPendingAdd = useDocumentsStore((s) => s.cancelPendingAdd);
+  const role = useUserStore((s) => s.role);
+  const member = role === "member";
   const open = Boolean(pending && pending.files.length > 0);
 
   useEffect(() => {
@@ -144,7 +147,9 @@ export function DuplicateAddDialog() {
         <div className="h-px bg-[var(--border)]" />
         <div className="shell-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <p className="text-[13px] leading-5 text-muted">
-            It matches an existing source. You can still add it — it will be saved as a duplicate.
+            {member
+              ? "It matches an existing source. Request admin review to keep it. Until then it stays pending and only you and admins can see it."
+              : "It matches an existing source. You can still add it — it will be saved as a duplicate."}
           </p>
           <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-canvas">
             <ul>
@@ -175,7 +180,7 @@ export function DuplicateAddDialog() {
             }}
             className="inline-flex h-8 min-w-[7.5rem] items-center justify-center rounded-xl bg-ink px-4 text-[13px] font-medium tracking-[-0.015em] text-white outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
           >
-            Add {count === 1 ? "file" : "files"}
+            {member ? "Request review" : `Add ${count === 1 ? "file" : "files"}`}
           </button>
         </div>
       </div>

@@ -1,6 +1,6 @@
 export const SOURCE_TOTAL = 4;
 
-export type DocumentStatus = "completed" | "duplicate" | "processing";
+export type DocumentStatus = "completed" | "duplicate" | "processing" | "pending_review";
 
 export type StatusTone = DocumentStatus | "original";
 
@@ -38,6 +38,13 @@ export const STATUS_PILL: Record<
     openClass:
       "bg-orange-50 hover:bg-orange-50 focus-visible:bg-orange-50",
   },
+  pending_review: {
+    label: "Pending",
+    className: "bg-[#f4efe8] text-[#8a5a2b]",
+    surface: "bg-[#faf6f1]",
+    openClass:
+      "bg-[#faf6f1] hover:bg-[#faf6f1] focus-visible:bg-[#faf6f1]",
+  },
 };
 
 export const UNIQUENESS_PILL: Record<
@@ -70,7 +77,7 @@ export function uniquenessMeta(value: SourceUniqueness) {
 }
 
 export function parseDocumentStatus(value: string | undefined): DocumentStatus {
-  if (value === "processing" || value === "duplicate") return value;
+  if (value === "processing" || value === "duplicate" || value === "pending_review") return value;
   if (value === "original") return "duplicate";
   return "completed";
 }
