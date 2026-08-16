@@ -88,15 +88,42 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, code, message);
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url(path), {
-    cache: "no-store",
-    ...init,
-  });
-  if (!response.ok) {
-    throw await parseError(response);
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryAfterMs(response: Response, fallback: number) {
+  const raw = response.headers.get("Retry-After");
+  if (!raw) return fallback;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(seconds * 1000, 15_000);
   }
-  return (await response.json()) as T;
+  return fallback;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let delay = 1000;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await fetch(url(path), {
+      cache: "no-store",
+      ...init,
+    });
+    if (response.status === 503) {
+      const error = await parseError(response);
+      if (error.code === "busy" && attempt < 4) {
+        await sleep(retryAfterMs(response, delay));
+        delay = Math.min(delay * 2, 8000);
+        continue;
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      throw await parseError(response);
+    }
+    return (await response.json()) as T;
+  }
+  throw new ApiError(503, "busy", "server is busy; retry shortly");
 }
 
 export function listDocuments() {
@@ -206,18 +233,31 @@ async function postFile<T>(
 ): Promise<T> {
   const form = new FormData();
   form.append("file", file);
-  const timeout = AbortSignal.timeout(120_000);
-  const combined = combineSignals(signal, timeout);
-  const response = await fetch(url(path), {
-    method: "POST",
-    body: form,
-    cache: "no-store",
-    signal: combined,
-  });
-  if (!response.ok) {
-    throw await parseError(response);
+  let delay = 1000;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const timeout = AbortSignal.timeout(120_000);
+    const combined = combineSignals(signal, timeout);
+    const response = await fetch(url(path), {
+      method: "POST",
+      body: form,
+      cache: "no-store",
+      signal: combined,
+    });
+    if (response.status === 503) {
+      const error = await parseError(response);
+      if (error.code === "busy" && attempt < 4 && !signal?.aborted) {
+        await sleep(retryAfterMs(response, delay));
+        delay = Math.min(delay * 2, 8000);
+        continue;
+      }
+      throw error;
+    }
+    if (!response.ok) {
+      throw await parseError(response);
+    }
+    return (await response.json()) as T;
   }
-  return (await response.json()) as T;
+  throw new ApiError(503, "busy", "server is busy; retry shortly");
 }
 
 export async function inspectFile(file: File, signal?: AbortSignal): Promise<InspectResult> {

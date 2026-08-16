@@ -4,10 +4,12 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Plus, Upload, X } from "lucide-react";
 import { AnzscoSelect } from "@/app/components/documents/anzsco-select";
+import { TeamSelect } from "@/app/components/documents/team-select";
 import { DocTitle } from "@/app/components/documents/doc-title";
 import { inspectFile, suggestTitle } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
 import { SOURCE_TOTAL, uniquenessMeta } from "@/app/lib/files";
+import { findTeam } from "@/app/lib/teams";
 import { useChromeStore } from "@/app/store/chrome-store";
 import {
   erpTaken,
@@ -472,7 +474,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
       client,
       erp,
       anzsco,
-      team,
+      team: findTeam(team) ?? "",
       member,
       files,
       titles: files.map((file) => {
@@ -581,12 +583,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
                 ERP code is already in use
               </p>
             </div>
-            <Field
-              label="Team"
-              value={team}
-              onChange={setTeam}
-              placeholder="Team"
-            />
+            <TeamSelect value={team} onChange={setTeam} />
             <Field
               label="Member"
               value={member}
