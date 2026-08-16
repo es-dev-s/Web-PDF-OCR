@@ -13,6 +13,7 @@ export const TEAMS = [
   "Nitro Negotiators",
   "Orbit",
   "Peak Achievers",
+  "Power Players",
   "Queen",
   "Success Sharks",
   "Summit Seekers",
