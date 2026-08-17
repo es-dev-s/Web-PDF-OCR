@@ -102,11 +102,21 @@ function AdminUsers() {
   }, []);
 
   useEffect(() => {
-    setLoading(true);
-    void refresh()
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
-  }, [refresh]);
+    let alive = true;
+    void (async () => {
+      try {
+        const { items } = await listUsers();
+        if (alive) setItems(items);
+      } catch {
+        if (alive) setItems([]);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const onDisable = async (user: ApiUser) => {
     if (user.id === selfId || busyId) return;
@@ -275,12 +285,25 @@ function AdminUsers() {
   );
 }
 
+// Mounting the form only while the dialog is open gives every visit a blank
+// form, so there is nothing to reset when it closes.
 function AddUserDialog({
   open,
   onClose,
   onCreated,
 }: {
   open: boolean
+  onClose: () => void
+  onCreated: () => void
+}) {
+  if (!open || typeof document === "undefined") return null;
+  return <AddUserForm onClose={onClose} onCreated={onCreated} />;
+}
+
+function AddUserForm({
+  onClose,
+  onCreated,
+}: {
   onClose: () => void
   onCreated: () => void
 }) {
@@ -293,25 +316,12 @@ function AddUserDialog({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (open) return;
-    setName("");
-    setEmail("");
-    setPassword("");
-    setRole("member");
-    setError("");
-    setBusy(false);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open || typeof document === "undefined") return null;
+  }, [onClose]);
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();

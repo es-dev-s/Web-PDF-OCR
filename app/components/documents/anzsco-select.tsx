@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, X } from "lucide-react";
 import { ANZSCO_OCCUPATIONS, findAnzsco } from "@/app/lib/anzsco";
@@ -19,9 +19,26 @@ export function AnzscoSelect({ value, onChange }: Props) {
   const activeRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState(0);
   const [box, setBox] = useState({ top: 0, left: 0, width: 0 });
   const selected = findAnzsco(value);
+
+  // The highlighted row belongs to one particular list. Tying it to that list
+  // resets it whenever the list changes, without an effect.
+  const listKey = open ? query : "";
+  const [highlight, setHighlight] = useState({ key: listKey, index: 0 });
+  const active = highlight.key === listKey ? highlight.index : 0;
+  const setActive = useCallback(
+    (next: number | ((current: number) => number)) => {
+      setHighlight((prev) => {
+        const current = prev.key === listKey ? prev.index : 0;
+        return {
+          key: listKey,
+          index: typeof next === "function" ? next(current) : next,
+        };
+      });
+    },
+    [listKey],
+  );
 
   const options = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -60,10 +77,6 @@ export function AnzscoSelect({ value, onChange }: Props) {
       window.removeEventListener("scroll", onWin, true);
     };
   }, [open]);
-
-  useEffect(() => {
-    setActive(0);
-  }, [query, open]);
 
   useEffect(() => {
     activeRef.current?.scrollIntoView({ block: "nearest" });
@@ -112,7 +125,7 @@ export function AnzscoSelect({ value, onChange }: Props) {
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("mousedown", onPointer);
     };
-  }, [open, options, active, onChange]);
+  }, [open, options, active, onChange, setActive]);
 
   const pick = (code: string) => {
     onChange(code);

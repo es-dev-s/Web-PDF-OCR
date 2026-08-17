@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, RotateCw, Search } from "lucide-react";
 import { AddDocumentDialog } from "@/app/components/documents/add-document-dialog";
-import { UploadStatsButton } from "@/app/components/documents/upload-stats-popover";
+import { DateFilterButton } from "@/app/components/documents/date-filter";
 import {
   useDocumentsStore,
 } from "@/app/store/documents-store";
@@ -118,11 +118,11 @@ function DocumentAdd() {
 
 export function DocumentsToolbar() {
   return (
-    <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-3 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
+    <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
       <DocumentSearch />
+      <DateFilterButton />
       <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
         <DocumentRowCount />
-        <UploadStatsButton />
         <DocumentReload />
         <DocumentAdd />
       </div>

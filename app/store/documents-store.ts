@@ -12,8 +12,9 @@ import {
   type InspectResult,
 } from "@/app/lib/api";
 import { anzscoMatches, foldSearch } from "@/app/lib/anzsco";
-import { formatDate, formatDateTime } from "@/app/lib/dates";
+import { formatDate, formatDateTime, toDayKey } from "@/app/lib/dates";
 import { SOURCE_TOTAL, parseDocumentStatus, parseUniqueness, type DocumentStatus, type SourceUniqueness } from "@/app/lib/files";
+import { displayTitle } from "@/app/lib/titles";
 import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 export type DuplicateMatch = {
@@ -29,6 +30,8 @@ export type DuplicateMatch = {
   uniqueness: SourceUniqueness
   fileUrl?: string
   contentType?: string
+  /** Member's reason for keeping this duplicate. Only set on duplicates. */
+  note?: string
 };
 
 export type SourceFile = {
@@ -41,6 +44,8 @@ export type SourceFile = {
   sizeBytes?: number
   duplicates: DuplicateMatch[]
   fileUrl?: string
+  /** Member's reason for keeping this duplicate. Only set on duplicates. */
+  note?: string
 };
 
 export type DocumentItem = {
@@ -86,6 +91,8 @@ export type PendingSourceAdd = {
 
 type DocumentsState = {
   query: string
+  dateFrom: string | null
+  dateTo: string | null
   items: DocumentItem[]
   visibleItems: DocumentItem[]
   expandedId: string | null
@@ -96,6 +103,7 @@ type DocumentsState = {
   pendingSourceAdd: PendingSourceAdd | null
   addingToId: string | null
   setQuery: (query: string) => void
+  setDateRange: (from: string | null, to: string | null) => void
   toggleExpanded: (id: string) => void
   toggleInspect: (docId: string, sourceId: string) => void
   openCompare: (docId: string, sourceId: string) => void
@@ -144,10 +152,37 @@ function matchesQuery(item: DocumentItem, query: string): boolean {
   );
 }
 
-function filterItems(items: DocumentItem[], query: string): DocumentItem[] {
+function matchesDate(item: DocumentItem, from: string | null, to: string | null) {
+  if (!from && !to) return true;
+  const key = toDayKey(item.uploadedAt);
+  if (!key) return false;
+  const start = from && to && from > to ? to : (from ?? to);
+  const end = from && to && from > to ? from : (to ?? from);
+  if (start && key < start) return false;
+  if (end && key > end) return false;
+  return true;
+}
+
+function filterItems(
+  items: DocumentItem[],
+  query: string,
+  from: string | null,
+  to: string | null,
+): DocumentItem[] {
   const q = foldSearch(query);
-  if (!q) return items;
-  return items.filter((item) => matchesQuery(item, q));
+  return items.filter((item) => {
+    if (q && !matchesQuery(item, q)) return false;
+    return matchesDate(item, from, to);
+  });
+}
+
+function visibleOf(state: {
+  items: DocumentItem[]
+  query: string
+  dateFrom: string | null
+  dateTo: string | null
+}) {
+  return filterItems(state.items, state.query, state.dateFrom, state.dateTo);
 }
 
 export function inspectKey(docId: string, sourceId: string) {
@@ -181,18 +216,19 @@ function nextErpCode(items: DocumentItem[]): string {
 function mapSource(source: ApiSource): SourceFile {
   return {
     id: source.id,
-    title: source.title,
+    title: displayTitle(source.title),
     uploaded: formatDateTime(source.uploaded_at),
     score: source.score,
     uniqueness: parseUniqueness(source.uniqueness),
     contentType: source.content_type,
     sizeBytes: source.size_bytes,
     fileUrl: source.file_url,
+    note: source.note?.trim() || undefined,
     duplicates: (source.duplicates ?? []).map((match) => ({
       id: match.id,
       sourceId: match.source_id,
       documentId: match.document_id,
-      title: match.title,
+      title: displayTitle(match.title),
       erp: match.erp,
       client: match.client,
       member: match.member,
@@ -201,6 +237,7 @@ function mapSource(source: ApiSource): SourceFile {
       uniqueness: parseUniqueness(match.uniqueness),
       fileUrl: match.file_url,
       contentType: match.content_type,
+      note: match.note?.trim() || undefined,
     })),
   };
 }
@@ -209,7 +246,7 @@ export function mapDocument(raw: ApiDocument): DocumentItem {
   const sources = (raw.sources ?? []).map(mapSource);
   return {
     id: raw.id,
-    title: raw.title,
+    title: displayTitle(raw.title),
     uploader: raw.uploader || raw.member,
     client: raw.client,
     erp: raw.erp,
@@ -236,6 +273,8 @@ function appendFiles(form: FormData, files: File[], titles?: string[]) {
 
 export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   query: "",
+  dateFrom: null,
+  dateTo: null,
   items: EMPTY,
   visibleItems: EMPTY,
   expandedId: null,
@@ -249,7 +288,17 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     if (get().query === query) return;
     set((state) => ({
       query,
-      visibleItems: filterItems(state.items, query),
+      visibleItems: visibleOf({ ...state, query }),
+    }));
+  },
+  setDateRange: (dateFrom, dateTo) => {
+    const from = dateFrom || null;
+    const to = dateTo || null;
+    if (get().dateFrom === from && get().dateTo === to) return;
+    set((state) => ({
+      dateFrom: from,
+      dateTo: to,
+      visibleItems: visibleOf({ ...state, dateFrom: from, dateTo: to }),
     }));
   },
   toggleExpanded: (id) => {
@@ -326,7 +375,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
           : null;
       return {
         items: next,
-        visibleItems: filterItems(next, state.query),
+        visibleItems: visibleOf({ ...state, items: next }),
         expandedId,
         pendingDeleteId,
         pendingViewId,
@@ -347,7 +396,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
             );
       return {
         items,
-        visibleItems: filterItems(items, state.query),
+        visibleItems: visibleOf({ ...state, items }),
       };
     });
   },
@@ -360,7 +409,10 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       const inspect = omitPrefixed(state.inspect, `${id}::`) ?? state.inspect;
       return {
         items: items.length === 0 ? EMPTY : items,
-        visibleItems: filterItems(items.length === 0 ? EMPTY : items, state.query),
+        visibleItems: visibleOf({
+          ...state,
+          items: items.length === 0 ? EMPTY : items,
+        }),
         expandedId: state.expandedId === id ? null : state.expandedId,
         pendingDeleteId:
           state.pendingDeleteId === id ? null : state.pendingDeleteId,

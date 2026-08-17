@@ -3,78 +3,66 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
-import { DocTitle } from "@/app/components/documents/doc-title";
-import type { InspectMatch, InspectResult } from "@/app/lib/api";
+import { MatchLine, matchFactsLabel } from "@/app/components/documents/duplicate-note";
+import { PreUploadCompare } from "@/app/components/documents/pre-upload-compare";
+import { inspectMatchUrl, type InspectMatch, type InspectResult } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
+import { uniquenessMeta } from "@/app/lib/files";
 import { useDocumentsStore, type PendingSourceAdd } from "@/app/store/documents-store";
 import { useUserStore } from "@/app/store/user-store";
 
-function display(value: string | undefined) {
-  const next = value?.trim() ?? "";
-  return next.length > 0 ? next : "—";
+function existingMatchNote(result: InspectResult, match: InspectMatch) {
+  const noted = result.matches.find((row) => row.note?.trim());
+  return {
+    note: noted?.note ?? match.note,
+    who: noted?.member ?? match.member,
+  };
 }
 
-export function MatchFacts({ match }: { match: InspectMatch }) {
-  const who = [match.member, match.client].filter((part) => part?.trim()).join(" · ");
-  const when = match.uploaded_at ? formatDateTime(match.uploaded_at) : "";
-  return (
-    <div className="min-w-0">
-      <DocTitle
-        value={display(match.title)}
-        className="text-[13px] font-medium tracking-[-0.01em] text-ink"
-      />
-      <p className="mt-0.5 font-mono text-[12px] tabular-nums text-ink">
-        {display(match.erp)}
-      </p>
-      <p className="mt-0.5 text-[12px] text-muted">{who || "—"}</p>
-      {when || Number.isFinite(match.score) ? (
-        <p className="mt-1 text-[11px] tabular-nums text-muted-soft">
-          {[when, Number.isFinite(match.score) ? match.score.toFixed(1) : ""]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
-      ) : null}
-    </div>
-  );
-}
+const FILE_PILL =
+  "inline-flex h-5 w-[4.75rem] shrink-0 items-center justify-center rounded-full text-[10px] font-medium";
 
 function IncomingFile({
   file,
   result,
+  onCompare,
 }: {
   file: File
   result: InspectResult
+  onCompare?: () => void
 }) {
   const match = result.matches[0];
+  const kept = match ? existingMatchNote(result, match) : undefined;
+  const uniqueMeta = uniquenessMeta("duplicate");
   return (
-    <li className="border-t border-[var(--border)] first:border-t-0">
-      <div className="flex items-start gap-3 px-4 py-3">
-        <FileText
-          className="mt-0.5 size-3.5 shrink-0 text-muted"
-          strokeWidth={1.75}
-          absoluteStrokeWidth
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-medium tracking-[0.04em] text-muted-soft uppercase">
-            Incoming file
-          </p>
-          <p className="mt-1 truncate text-[13px] text-ink">{file.name}</p>
-          {match ? (
-            <div className="mt-3 rounded-xl bg-surface px-3 py-2.5">
-              <p className="text-[11px] font-medium tracking-[0.04em] text-muted-soft uppercase">
-                Duplicate of
-              </p>
-              <div className="mt-1.5">
-                <MatchFacts match={match} />
-              </div>
-            </div>
-          ) : (
-            <p className="mt-2 text-[12px] text-muted">
-              Same file as another in this upload.
-            </p>
-          )}
-        </div>
+    <li className="grid grid-cols-[1.125rem_minmax(0,1fr)_auto] items-start gap-x-2.5 border-t border-[var(--border)] px-3 py-2.5 first:border-t-0">
+      <FileText
+        className="mt-[3px] size-3.5 shrink-0 text-muted"
+        strokeWidth={1.75}
+        absoluteStrokeWidth
+      />
+      <div className="min-w-0">
+        <p className="truncate text-[13px] text-ink">{file.name}</p>
       </div>
+      <span className="mt-0.5 flex shrink-0 items-center gap-0.5">
+        <span className={`${FILE_PILL} ${uniqueMeta.className}`}>
+          {uniqueMeta.label}
+        </span>
+      </span>
+      {match ? (
+        <div className="col-span-2 col-start-2 min-w-0">
+          <MatchLine
+            match={match}
+            note={kept?.note}
+            who={kept?.who}
+            onCompare={onCompare}
+          />
+        </div>
+      ) : (
+        <p className="col-span-2 col-start-2 mt-1 truncate text-[11px] leading-4 text-muted">
+          Same file as another in this upload.
+        </p>
+      )}
     </li>
   );
 }
@@ -94,6 +82,23 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
   const member = role === "member";
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [compareIndex, setCompareIndex] = useState(-1);
+  const comparing =
+    compareIndex >= 0 ? pending.files[compareIndex] ?? null : null;
+  const compareMatch = comparing
+    ? pending.results[compareIndex]?.matches[0]
+    : undefined;
+  const compareKept =
+    comparing && compareMatch
+      ? existingMatchNote(
+          pending.results[compareIndex] ?? {
+            ok: true,
+            uniqueness: "duplicate",
+            matches: [],
+          },
+          compareMatch,
+        )
+      : undefined;
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => cancelRef.current?.focus());
@@ -116,7 +121,7 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
   const count = pending.files.length;
   const heading = count === 1 ? "This file is a duplicate" : "These files are duplicates";
 
-  return createPortal(
+  const dialog = createPortal(
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
       <button
         type="button"
@@ -162,6 +167,11 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
                   key={`${file.name}:${file.size}:${file.lastModified}:${index}`}
                   file={file}
                   result={pending.results[index] ?? { ok: true, uniqueness: "duplicate", matches: [] }}
+                  onCompare={
+                    pending.results[index]?.matches[0]
+                      ? () => setCompareIndex(index)
+                      : undefined
+                  }
                 />
               ))}
             </ul>
@@ -215,5 +225,29 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
       </div>
     </div>,
     document.body,
+  );
+
+  return (
+    <>
+      {dialog}
+      {comparing && compareMatch ? (
+        <PreUploadCompare
+          file={comparing}
+          incomingTitle={comparing.name}
+          matchTitle={compareMatch.title || ""}
+          matchFacts={[
+            matchFactsLabel(compareMatch),
+            compareMatch.uploaded_at ? formatDateTime(compareMatch.uploaded_at) : "",
+          ]
+            .filter((part) => part && String(part).trim())
+            .join(" · ")}
+          matchUrl={inspectMatchUrl(compareMatch)}
+          matchUniqueness={compareMatch.uniqueness}
+          matchNote={compareKept?.note}
+          matchWho={compareKept?.who}
+          onClose={() => setCompareIndex(-1)}
+        />
+      ) : null}
+    </>
   );
 }

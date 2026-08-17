@@ -7,6 +7,8 @@ import { useUserStore } from "@/app/store/user-store";
 function DocumentsTableBody() {
   const items = useDocumentsStore((s) => s.visibleItems);
   const query = useDocumentsStore((s) => s.query);
+  const dateFrom = useDocumentsStore((s) => s.dateFrom);
+  const dateTo = useDocumentsStore((s) => s.dateTo);
   const role = useUserStore((s) => s.role);
   const rows =
     role === "admin"
@@ -16,8 +18,8 @@ function DocumentsTableBody() {
   if (rows.length === 0) {
     return (
       <p className="px-4 py-10 text-center text-[13px] text-muted">
-        {query.trim()
-          ? "No documents match this search."
+        {query.trim() || dateFrom || dateTo
+          ? "No documents match this filter."
           : "No documents yet."}
       </p>
     );

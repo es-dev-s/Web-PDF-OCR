@@ -1,10 +1,17 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { FileStage, PaneHead } from "@/app/components/documents/compare-view";
+import { DuplicateNote } from "@/app/components/documents/duplicate-note";
 import { SAME_ORIGIN_BACKEND } from "@/app/lib/backend";
-import { uniquenessMeta, type SourceUniqueness } from "@/app/lib/files";
 import { useChromeStore } from "@/app/store/chrome-store";
 import {
   useDocumentsStore,
@@ -56,96 +63,6 @@ function resolveMatchFile(
   return { url: match.fileUrl || "", contentType: match.contentType };
 }
 
-function FileStage({
-  url,
-  contentType,
-  label,
-}: {
-  url?: string
-  contentType?: string
-  label: string
-}) {
-  const [status, setStatus] = useState<"loading" | "ready" | "empty" | "error">(
-    url ? "loading" : "empty",
-  );
-  const [src, setSrc] = useState("");
-  const [kind, setKind] = useState<"PDF" | "image">("PDF");
-
-  useEffect(() => {
-    if (!url) {
-      setStatus("empty");
-      setSrc("");
-      return;
-    }
-    const ac = new AbortController();
-    const typeHint = (contentType ?? "").toLowerCase();
-    setStatus("loading");
-    setSrc("");
-    void fetch(url, { method: "HEAD", signal: ac.signal, cache: "no-store" })
-      .then(async (response) => {
-        if (response.status === 405 || response.status === 501) {
-          return fetch(url, { method: "GET", signal: ac.signal, cache: "no-store" });
-        }
-        return response;
-      })
-      .then((response) => {
-        if (ac.signal.aborted) return;
-        if (!response.ok) throw new Error("unavailable");
-        const type = (response.headers.get("content-type") || typeHint).toLowerCase();
-        if (type.includes("application/json") || type.includes("text/html")) {
-          throw new Error("unavailable");
-        }
-        setKind(type.startsWith("image/") ? "image" : "PDF");
-        setSrc(url);
-        setStatus("ready");
-      })
-      .catch((error) => {
-        if (ac.signal.aborted) return;
-        if (error instanceof DOMException && error.name === "AbortError") return;
-        setStatus("error");
-      });
-    return () => ac.abort();
-  }, [url, contentType]);
-
-  if (status === "loading") {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-[13px] text-muted-soft">Loading preview</p>
-      </div>
-    );
-  }
-  if (status === "empty" || status === "error" || !src) {
-    return (
-      <div className="flex h-full items-center justify-center px-8 text-center">
-        <p className="text-[13px] leading-5 text-muted">
-          {status === "empty"
-            ? "This file isn’t available to preview."
-            : "This file isn’t in storage."}
-        </p>
-      </div>
-    );
-  }
-  if (kind === "PDF") {
-    return (
-      <iframe
-        src={`${src}#toolbar=0&navpanes=0&view=FitH`}
-        title={label}
-        className="h-full w-full border-0 bg-white"
-      />
-    );
-  }
-  return (
-    <div className="flex h-full items-center justify-center bg-[var(--canvas)] p-8">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={label}
-        className="max-h-full max-w-full object-contain"
-      />
-    </div>
-  );
-}
-
 function DuplicateSwitcher({
   index,
   total,
@@ -186,45 +103,6 @@ function DuplicateSwitcher({
   );
 }
 
-function PaneHead({
-  kicker,
-  title,
-  detail,
-  uniqueness,
-  trailing,
-}: {
-  kicker: string
-  title: string
-  detail: string
-  uniqueness?: SourceUniqueness
-  trailing?: ReactNode
-}) {
-  const pill = uniqueness ? uniquenessMeta(uniqueness) : null;
-  return (
-    <div className="flex min-h-14 shrink-0 items-center gap-4 border-b border-[var(--border)] px-5 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="text-[11px] font-medium tracking-[0.06em] text-muted-soft uppercase">
-            {kicker}
-          </p>
-          {pill ? (
-            <span
-              className={`inline-flex h-5 items-center rounded-full px-1.5 text-[10px] font-medium ${pill.className}`}
-            >
-              {pill.label}
-            </span>
-          ) : null}
-        </div>
-        <p title={title} className="mt-0.5 truncate text-[13px] font-medium tracking-[-0.015em] text-ink">
-          {title}
-        </p>
-        <p className="truncate text-[11px] text-muted">{detail}</p>
-      </div>
-      {trailing}
-    </div>
-  );
-}
-
 export function CompareDocumentDialog() {
   const titleId = useId();
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -241,17 +119,27 @@ export function CompareDocumentDialog() {
     : null;
   const closeCompare = useDocumentsStore((s) => s.closeCompare);
   const duplicates = source?.duplicates ?? [];
-  const [index, setIndex] = useState(0);
   const open = Boolean(pending && item && source);
 
-  useEffect(() => {
-    setIndex(0);
-  }, [pending?.docId, pending?.sourceId]);
-
-  useEffect(() => {
-    if (index < duplicates.length) return;
-    setIndex(0);
-  }, [duplicates.length, index]);
+  // The cursor belongs to one source. Keying it means switching sources, or
+  // losing the duplicate it pointed at, falls back to the first entry without
+  // an extra render pass.
+  const compareKey = `${pending?.docId ?? ""}:${pending?.sourceId ?? ""}`;
+  const [cursor, setCursor] = useState({ key: compareKey, index: 0 });
+  const carried = cursor.key === compareKey ? cursor.index : 0;
+  const index = carried < duplicates.length ? carried : 0;
+  const setIndex = useCallback(
+    (next: number | ((current: number) => number)) => {
+      setCursor((prev) => {
+        const current = prev.key === compareKey ? prev.index : 0;
+        return {
+          key: compareKey,
+          index: typeof next === "function" ? next(current) : next,
+        };
+      });
+    },
+    [compareKey],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -302,7 +190,7 @@ export function CompareDocumentDialog() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeCompare, duplicates.length]);
+  }, [open, closeCompare, duplicates.length, setIndex]);
 
   if (!open || !item || !source || typeof document === "undefined") return null;
 
@@ -361,6 +249,11 @@ export function CompareDocumentDialog() {
               title={source.title}
               detail={[item.client, source.uploaded].filter(Boolean).join(" · ")}
               uniqueness={source.uniqueness}
+              trailing={
+                source.uniqueness === "duplicate" ? (
+                  <DuplicateNote note={source.note} who={item.member} compact />
+                ) : undefined
+              }
             />
             <div className="min-h-0 flex-1 bg-[var(--canvas)]">
               <FileStage
@@ -384,18 +277,27 @@ export function CompareDocumentDialog() {
                     .join(" · ")}
                   uniqueness={match.uniqueness}
                   trailing={
-                    duplicates.length > 0 ? (
-                      <DuplicateSwitcher
-                        index={index}
-                        total={duplicates.length}
-                        onPrev={() => setIndex((current) => Math.max(0, current - 1))}
-                        onNext={() =>
-                          setIndex((current) =>
-                            Math.min(duplicates.length - 1, current + 1),
-                          )
-                        }
-                      />
-                    ) : null
+                    <span className="flex shrink-0 items-center gap-1">
+                      {match.uniqueness === "duplicate" ? (
+                        <DuplicateNote
+                          note={match.note}
+                          who={match.member}
+                          compact
+                        />
+                      ) : null}
+                      {duplicates.length > 0 ? (
+                        <DuplicateSwitcher
+                          index={index}
+                          total={duplicates.length}
+                          onPrev={() => setIndex((current) => Math.max(0, current - 1))}
+                          onNext={() =>
+                            setIndex((current) =>
+                              Math.min(duplicates.length - 1, current + 1),
+                            )
+                          }
+                        />
+                      ) : null}
+                    </span>
                   }
                 />
                 <div className="min-h-0 flex-1 bg-[var(--canvas)]">

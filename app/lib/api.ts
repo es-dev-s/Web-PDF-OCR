@@ -26,6 +26,7 @@ export type ApiDuplicate = {
   content_type?: string
   kind?: string
   uniqueness?: SourceUniqueness
+  note?: string
 };
 
 export type ApiSource = {
@@ -38,6 +39,7 @@ export type ApiSource = {
   size_bytes?: number
   file_url: string
   duplicates: ApiDuplicate[]
+  note?: string
 };
 
 export type ApiDocument = {
@@ -286,8 +288,35 @@ export async function suggestTitle(file: File, signal?: AbortSignal): Promise<Ti
   return postFile<TitleSuggestion>("/v1/engine/title", file, signal);
 }
 
+export function inspectMatchUrl(match: {
+  id: string
+  document_id?: string
+  file_url?: string
+}) {
+  const raw = (match.file_url || "").trim();
+  if (raw.startsWith("/backend/")) return raw;
+  if (raw.startsWith("/v1/")) return `/backend${raw}`;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      const at = parsed.pathname.indexOf("/v1/");
+      if (at >= 0) return `/backend${parsed.pathname.slice(at)}`;
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
+  if (raw) return raw;
+  if (match.document_id && match.id) {
+    return `/backend/v1/documents/${match.document_id}/sources/${match.id}/file`;
+  }
+  return "";
+}
+
 export type InspectMatch = {
   id: string
+  document_id?: string
+  file_url?: string
   title: string
   erp: string
   client?: string
@@ -296,6 +325,9 @@ export type InspectMatch = {
   uploaded_at: string
   uniqueness?: SourceUniqueness
   kind?: string
+  note?: string
+  anzsco?: string
+  team?: string
 };
 
 export type InspectResult = {

@@ -4,6 +4,7 @@ import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { FileText, FolderOpen, Plus, X } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
+import { DuplicateNote } from "@/app/components/documents/duplicate-note";
 import { findAnzsco, formatAnzsco } from "@/app/lib/anzsco";
 import { formatDateTime } from "@/app/lib/dates";
 import {
@@ -55,10 +56,12 @@ function Fact({
 function SourceCard({
   source,
   client,
+  member,
   pendingHash,
 }: {
   source: SourceFile
   client: string
+  member: string
   pendingHash: boolean
 }) {
   const kind = fileKind(source.contentType);
@@ -95,6 +98,11 @@ function SourceCard({
             {source.uploaded}
           </p>
         </div>
+        {source.uniqueness === "duplicate" ? (
+          <div className="mt-0.5 shrink-0">
+            <DuplicateNote note={source.note} who={member} />
+          </div>
+        ) : null}
         {source.fileUrl ? (
           <button
             type="button"
@@ -126,10 +134,15 @@ function SourceCard({
                       .join(" · ")}
                   </p>
                 </div>
-                <span
-                  className={`inline-flex h-5 shrink-0 items-center rounded-full px-1.5 text-[10px] font-medium ${matchMeta.className}`}
-                >
-                  {matchMeta.label}
+                <span className="flex shrink-0 items-center gap-1">
+                  <span
+                    className={`inline-flex h-5 shrink-0 items-center rounded-full px-1.5 text-[10px] font-medium ${matchMeta.className}`}
+                  >
+                    {matchMeta.label}
+                  </span>
+                  {match.uniqueness === "duplicate" ? (
+                    <DuplicateNote note={match.note} who={match.member} compact />
+                  ) : null}
                 </span>
               </li>
             );
@@ -219,6 +232,7 @@ function ViewBody({ item }: { item: DocumentItem }) {
                   key={source.id}
                   source={source}
                   client={item.client}
+                  member={item.member || item.uploader}
                   pendingHash={isHashPending(item.status, source)}
                 />
               ))}

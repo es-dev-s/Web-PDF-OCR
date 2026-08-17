@@ -3,6 +3,7 @@
 import { memo, useCallback, useRef } from "react";
 import { Eye, FolderOpen, GitCompare, Link2, Plus, Trash2 } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
+import { DuplicateNote } from "@/app/components/documents/duplicate-note";
 import { IconBtn } from "@/app/components/documents/icon-btn";
 import { findAnzsco } from "@/app/lib/anzsco";
 import { SOURCE_TOTAL, isHashPending, statusMeta, uniquenessMeta, type SourceUniqueness, type StatusTone } from "@/app/lib/files";
@@ -20,7 +21,7 @@ export const COLS =
   "grid-cols-[minmax(10rem,1.45fr)_minmax(0,0.85fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_auto]";
 
 const SOURCE_COLS =
-  "grid-cols-[minmax(0,1.5fr)_minmax(0,0.95fr)_9.5rem_4.25rem_6.75rem_9.5rem]";
+  "grid-cols-[minmax(0,1.5fr)_minmax(0,0.95fr)_9.5rem_4.25rem_8.75rem_9.5rem]";
 
 const ACTION_SLOT = "flex w-full min-w-0 items-center justify-end gap-1";
 
@@ -191,11 +192,13 @@ function MatchCountButton({
 
 function SourceStatus({
   source,
+  member,
   inspecting,
   pendingHash,
   onInspect,
 }: {
   source: SourceFile
+  member: string
   inspecting: boolean
   pendingHash: boolean
   onInspect: () => void
@@ -210,17 +213,25 @@ function SourceStatus({
   if (source.uniqueness === "unique") {
     return <UniquenessPill value="unique" />;
   }
-  if (source.duplicates.length > 0) {
-    return (
+  const pill =
+    source.duplicates.length > 0 ? (
       <MatchCountButton
         uniqueness="duplicate"
         count={source.duplicates.length}
         open={inspecting}
         onToggle={onInspect}
       />
+    ) : (
+      <UniquenessPill value="duplicate" />
     );
-  }
-  return <UniquenessPill value="duplicate" />;
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      {pill}
+      {source.uniqueness === "duplicate" ? (
+        <DuplicateNote note={source.note} who={member} compact />
+      ) : null}
+    </span>
+  );
 }
 
 function DuplicateDetails({ matches }: { matches: DuplicateMatch[] }) {
@@ -250,7 +261,12 @@ function DuplicateDetails({ matches }: { matches: DuplicateMatch[] }) {
             </p>
           </div>
           <div className={SOURCE_BODY_CELL}>
-            <UniquenessPill value={match.uniqueness} />
+            <span className="flex min-w-0 items-center gap-1">
+              <UniquenessPill value={match.uniqueness} />
+              {match.uniqueness === "duplicate" ? (
+                <DuplicateNote note={match.note} who={match.member} compact />
+              ) : null}
+            </span>
           </div>
           <div className={`${SOURCE_BODY_CELL} justify-end`}>
             <div className={ACTION_SLOT} />
@@ -265,6 +281,7 @@ const SourceRow = memo(function SourceRow({
   docId,
   source,
   client,
+  member,
   canAdd,
   pendingHash,
   onAdd,
@@ -274,6 +291,7 @@ const SourceRow = memo(function SourceRow({
   docId: string
   source: SourceFile | null
   client: string
+  member: string
   canAdd: boolean
   pendingHash: boolean
   onAdd: () => void
@@ -328,6 +346,7 @@ const SourceRow = memo(function SourceRow({
           {source ? (
             <SourceStatus
               source={source}
+              member={member}
               inspecting={inspecting}
               pendingHash={pendingHash}
               onInspect={() => onInspect(source.id)}
@@ -471,6 +490,7 @@ function DocumentSources({ item }: { item: DocumentItem }) {
           docId={item.id}
           source={source}
           client={item.client}
+          member={item.member || item.uploader}
           canAdd={canAdd}
           pendingHash={source ? isHashPending(item.status, source) : false}
           onAdd={onAdd}
