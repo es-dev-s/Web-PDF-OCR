@@ -4,7 +4,10 @@ import { memo, useCallback, useRef } from "react";
 import { Eye, FolderOpen, GitCompare, Link2, Plus, Trash2 } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
 import { IconBtn } from "@/app/components/documents/icon-btn";
+import { findAnzsco } from "@/app/lib/anzsco";
 import { SOURCE_TOTAL, isHashPending, statusMeta, uniquenessMeta, type SourceUniqueness, type StatusTone } from "@/app/lib/files";
+import { useAccordionHold } from "@/app/hooks/use-accordion-hold";
+import { isAdmin, useUserStore } from "@/app/store/user-store";
 import {
   inspectKey,
   useDocumentsStore,
@@ -287,6 +290,7 @@ const SourceRow = memo(function SourceRow({
         s.pendingCompare.sourceId === source.id,
     ),
   );
+  const inspectOpen = useAccordionHold(inspecting);
   return (
     <>
       <div
@@ -371,7 +375,7 @@ const SourceRow = memo(function SourceRow({
           data-open={inspecting ? "true" : "false"}
           aria-hidden={!inspecting}
         >
-          <div className="doc-accordion-inner">
+          <div className="doc-accordion-inner" inert={!inspectOpen || undefined}>
             <DuplicateDetails matches={source.duplicates} />
           </div>
         </div>
@@ -389,6 +393,30 @@ function DetailFact({ label, value }: { label: string; value: string }) {
       <p className="mt-0.5 truncate text-[13px] text-ink" title={value}>
         {value}
       </p>
+    </div>
+  );
+}
+
+function AnzscoFact({ value }: { value: string }) {
+  const match = findAnzsco(value);
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-medium tracking-[0.04em] text-muted-soft uppercase">
+        ANZSCO
+      </p>
+      {match ? (
+        <p
+          className="mt-0.5 flex min-w-0 items-baseline gap-2"
+          title={`${match.title} · ${match.code}`}
+        >
+          <span className="min-w-0 truncate text-[13px] text-ink">{match.title}</span>
+          <span className="shrink-0 font-mono text-[12px] tabular-nums text-muted">
+            {match.code}
+          </span>
+        </p>
+      ) : (
+        <p className="mt-0.5 truncate text-[13px] text-ink">{value.trim() || "—"}</p>
+      )}
     </div>
   );
 }
@@ -434,7 +462,7 @@ function DocumentSources({ item }: { item: DocumentItem }) {
       <div className="grid grid-cols-3 gap-x-4 border-b border-[var(--border)] px-4 py-3">
         <DetailFact label="Client" value={item.client || "—"} />
         <DetailFact label="Team" value={item.team || "—"} />
-        <DetailFact label="ANZSCO" value={item.anzsco || "—"} />
+        <AnzscoFact value={item.anzsco} />
       </div>
       <SourceHeader />
       {sourceSlots(item.sources).map((source, index) => (
@@ -457,6 +485,7 @@ function DocumentSources({ item }: { item: DocumentItem }) {
 function DocumentActions({ item }: { item: DocumentItem }) {
   const askRemove = useDocumentsStore((s) => s.askRemove);
   const openView = useDocumentsStore((s) => s.openView);
+  const admin = isAdmin(useUserStore((s) => s.role));
   const fileHref = item.fileUrl ?? item.url;
 
   return (
@@ -474,9 +503,11 @@ function DocumentActions({ item }: { item: DocumentItem }) {
       <IconBtn label="Open file" onClick={() => openExternal(fileHref)}>
         <FolderOpen className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
       </IconBtn>
-      <IconBtn label="Delete" onClick={() => askRemove(item.id)}>
-        <Trash2 className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-      </IconBtn>
+      {admin ? (
+        <IconBtn label="Delete" onClick={() => askRemove(item.id)}>
+          <Trash2 className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+        </IconBtn>
+      ) : null}
     </div>
   );
 }
@@ -489,6 +520,7 @@ export const DocumentRow = memo(function DocumentRow({
   const expanded = useDocumentsStore((s) => s.expandedId === item.id);
   const toggleExpanded = useDocumentsStore((s) => s.toggleExpanded);
   const tone = rowTone(item, expanded);
+  const hold = useAccordionHold(expanded);
 
   const onRowClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
@@ -547,7 +579,7 @@ export const DocumentRow = memo(function DocumentRow({
         data-open={expanded ? "true" : "false"}
         aria-hidden={!expanded}
       >
-        <div className="doc-accordion-inner" inert={!expanded || undefined}>
+        <div className="doc-accordion-inner" inert={!hold || undefined}>
           <DocumentSources item={item} />
         </div>
       </div>

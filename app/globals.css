@@ -146,7 +146,8 @@ body {
   overflow: hidden;
   overflow-anchor: none;
   pointer-events: none;
-  transition: grid-template-rows var(--shell-duration) var(--shell-ease);
+  interpolate-size: allow-keywords;
+  transition: grid-template-rows 360ms var(--shell-ease);
 }
 
 .doc-accordion[data-open="true"] {
@@ -157,6 +158,16 @@ body {
 .doc-accordion-inner {
   min-height: 0;
   overflow: hidden;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    opacity 260ms var(--shell-ease),
+    transform 360ms var(--shell-ease);
+}
+
+.doc-accordion[data-open="true"] > .doc-accordion-inner {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .doc-row {

@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
 import type { InspectMatch, InspectResult } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
-import { useDocumentsStore } from "@/app/store/documents-store";
+import { useDocumentsStore, type PendingSourceAdd } from "@/app/store/documents-store";
 import { useUserStore } from "@/app/store/user-store";
 
 function display(value: string | undefined) {
@@ -80,23 +80,27 @@ function IncomingFile({
 }
 
 export function DuplicateAddDialog() {
+  const pending = useDocumentsStore((s) => s.pendingSourceAdd);
+  if (!pending || pending.files.length === 0) return null;
+  return <DuplicateAddPanel pending={pending} />;
+}
+
+function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
   const titleId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const pending = useDocumentsStore((s) => s.pendingSourceAdd);
   const confirmPendingAdd = useDocumentsStore((s) => s.confirmPendingAdd);
   const cancelPendingAdd = useDocumentsStore((s) => s.cancelPendingAdd);
   const role = useUserStore((s) => s.role);
   const member = role === "member";
-  const open = Boolean(pending && pending.files.length > 0);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
     const frame = window.requestAnimationFrame(() => cancelRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [open]);
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -105,9 +109,9 @@ export function DuplicateAddDialog() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, cancelPendingAdd]);
+  }, [cancelPendingAdd]);
 
-  if (!open || !pending || typeof document === "undefined") return null;
+  if (typeof document === "undefined") return null;
 
   const count = pending.files.length;
   const heading = count === 1 ? "This file is a duplicate" : "These files are duplicates";
@@ -162,6 +166,25 @@ export function DuplicateAddDialog() {
               ))}
             </ul>
           </div>
+          {member ? (
+            <label className="mt-4 block min-w-0">
+              <span className="mb-1.5 block text-[12px] font-medium text-muted">
+                Reason for review
+              </span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value.slice(0, 500))}
+                rows={2}
+                maxLength={500}
+                required
+                placeholder="Why should this duplicate be kept?"
+                className="min-h-[4.5rem] w-full resize-none rounded-xl border border-[var(--border)] bg-canvas px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-muted-soft focus:border-[var(--border-strong)]"
+              />
+              <span className="mt-1.5 block text-[11px] leading-4 text-muted-soft">
+                An admin will see this with the pending files.
+              </span>
+            </label>
+          ) : null}
         </div>
         <div className="h-px bg-[var(--border)]" />
         <div className="flex h-14 shrink-0 items-center justify-end gap-2 px-5">
@@ -175,10 +198,16 @@ export function DuplicateAddDialog() {
           </button>
           <button
             type="button"
+            disabled={busy || (member && note.trim().length === 0)}
             onClick={() => {
-              void confirmPendingAdd();
+              if (busy) return;
+              if (member && note.trim().length === 0) return;
+              setBusy(true);
+              void confirmPendingAdd(member ? note.trim() : undefined).finally(() => {
+                setBusy(false);
+              });
             }}
-            className="inline-flex h-8 min-w-[7.5rem] items-center justify-center rounded-xl bg-ink px-4 text-[13px] font-medium tracking-[-0.015em] text-white outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+            className="inline-flex h-8 min-w-[7.5rem] items-center justify-center rounded-xl bg-ink px-4 text-[13px] font-medium tracking-[-0.015em] text-white outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:bg-ink/30 disabled:hover:bg-ink/30"
           >
             {member ? "Request review" : `Add ${count === 1 ? "file" : "files"}`}
           </button>

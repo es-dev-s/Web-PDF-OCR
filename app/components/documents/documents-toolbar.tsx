@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Plus, RotateCw, Search } from "lucide-react";
 import { AddDocumentDialog } from "@/app/components/documents/add-document-dialog";
+import { UploadStatsButton } from "@/app/components/documents/upload-stats-popover";
 import {
   useDocumentsStore,
 } from "@/app/store/documents-store";
@@ -24,7 +25,8 @@ function DocumentSearch() {
         inputMode="search"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search"
+        placeholder="Search client, team, or ANZSCO"
+        aria-label="Search by client, team, or ANZSCO"
         autoComplete="off"
         spellCheck={false}
         className="h-8 w-full rounded-xl border border-[var(--border)] bg-canvas pr-3 pl-8 text-[13px] text-ink outline-none placeholder:text-muted-soft focus:border-[var(--border-strong)]"
@@ -120,6 +122,7 @@ export function DocumentsToolbar() {
       <DocumentSearch />
       <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
         <DocumentRowCount />
+        <UploadStatsButton />
         <DocumentReload />
         <DocumentAdd />
       </div>

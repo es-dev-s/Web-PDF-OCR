@@ -378,6 +378,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
   const [over, setOver] = useState(false);
   const [erpError, setErpError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [note, setNote] = useState("");
   const titles = useSourceTitles(open, files);
   const inspect = useSourceInspect(open, files);
 
@@ -395,6 +396,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
     setOver(false);
     setErpError(false);
     setSubmitting(false);
+    setNote("");
     void suggestErp().then((code) => {
       if (gen !== erpGen.current || erpTouched.current) return;
       setErp(code);
@@ -463,9 +465,23 @@ export function AddDocumentDialog({ open, onClose }: Props) {
     addIncoming(Array.from(event.dataTransfer.files ?? []));
   };
 
+  const inspecting = files.some((file) => inspect[fileKey(file)]?.pending !== false);
+  const needsReason =
+    !admin &&
+    files.some((file) => {
+      const check = inspect[fileKey(file)];
+      return Boolean(
+        check &&
+          !check.pending &&
+          !check.failed &&
+          check.uniqueness === "duplicate",
+      );
+    });
+
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy.current || submitting) return;
+    if (needsReason && note.trim().length === 0) return;
     if (erpTaken(erp)) {
       setErpError(true);
       return;
@@ -484,6 +500,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
         if (!entry || entry.pending || !isPrintedTitle(entry.value)) return "";
         return entry.value;
       }),
+      note: needsReason ? note.trim() : undefined,
     });
     if (result === "erp") {
       busy.current = false;
@@ -501,14 +518,14 @@ export function AddDocumentDialog({ open, onClose }: Props) {
 
   if (!open || typeof document === "undefined") return null;
 
-  const inspecting = files.some((file) => inspect[fileKey(file)]?.pending !== false);
   const canSubmit =
     client.trim().length > 0 &&
     erp.trim().length > 0 &&
     files.length > 0 &&
     !erpError &&
     !submitting &&
-    !inspecting;
+    !inspecting &&
+    (!needsReason || note.trim().length > 0);
 
   return createPortal(
     <div
@@ -750,6 +767,26 @@ export function AddDocumentDialog({ open, onClose }: Props) {
               )}
             </div>
           </div>
+
+          {needsReason ? (
+            <label className="mt-4 block min-w-0">
+              <span className="mb-1.5 block text-[12px] font-medium text-muted">
+                Reason for review
+              </span>
+              <textarea
+                value={note}
+                onChange={(event) => setNote(event.target.value.slice(0, 500))}
+                rows={3}
+                maxLength={500}
+                required
+                placeholder="Why should this duplicate be kept?"
+                className="min-h-[4.5rem] w-full resize-none rounded-xl border border-[var(--border)] bg-canvas px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-muted-soft focus:border-[var(--border-strong)]"
+              />
+              <span className="mt-1.5 block text-[11px] leading-4 text-muted-soft">
+                An admin will see this with the pending files.
+              </span>
+            </label>
+          ) : null}
         </div>
 
         {over ? (
@@ -782,7 +819,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
             className="inline-flex h-8 min-w-[7.5rem] items-center justify-center gap-1.5 rounded-xl bg-ink px-4 text-[13px] font-medium tracking-[-0.015em] text-white outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:bg-ink/30 disabled:hover:bg-ink/30"
           >
             <Plus className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-            Add document
+            {needsReason ? "Request review" : "Add document"}
           </button>
         </div>
       </form>

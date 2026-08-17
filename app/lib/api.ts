@@ -54,6 +54,8 @@ export type ApiDocument = {
   url: string
   file_url: string
   sources: ApiSource[]
+  review_note?: string
+  review_requested_at?: string
 };
 
 export type ApiNotification = {
@@ -156,6 +158,29 @@ export function addSources(id: string, form: FormData) {
     method: "POST",
     body: form,
   });
+}
+
+export type UploadDay = {
+  day: string
+  documents: number
+  sources: number
+};
+
+export type UploadStats = {
+  bucket: string
+  timezone: string
+  from: string
+  to: string
+  days: UploadDay[]
+  total: { documents: number; sources: number }
+};
+
+export function uploadStats(from?: string, to?: string) {
+  const query = new URLSearchParams();
+  if (from) query.set("from", from);
+  if (to) query.set("to", to);
+  const suffix = query.toString() ? `?${query}` : "";
+  return request<UploadStats>(`/v1/stats/uploads${suffix}`);
 }
 
 export function deleteDocument(id: string) {

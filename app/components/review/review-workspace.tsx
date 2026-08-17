@@ -1,28 +1,37 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { Eye, GitCompare, RotateCw, ScanSearch, Search } from "lucide-react";
 import { CompareDocumentDialog } from "@/app/components/documents/compare-document-dialog";
 import { IconBtn } from "@/app/components/documents/icon-btn";
 import { ViewDocumentDialog } from "@/app/components/documents/view-document-dialog";
+import { formatDateTime } from "@/app/lib/dates";
+import { statusMeta } from "@/app/lib/files";
+import { useAccordionHold } from "@/app/hooks/use-accordion-hold";
 import { approveReview, listReviews, rejectReview } from "@/app/lib/api";
 import {
   mapDocument,
   useDocumentsStore,
   type DocumentItem,
   type DuplicateMatch,
+  type SourceFile,
 } from "@/app/store/documents-store";
 import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 const COLS =
-  "grid-cols-[minmax(10rem,1.45fr)_minmax(0,0.75fr)_minmax(0,0.9fr)_minmax(0,1fr)_9.5rem_13.75rem]";
+  "grid-cols-[minmax(8rem,1.05fr)_minmax(0,1.05fr)_minmax(0,0.7fr)_minmax(0,0.85fr)_minmax(0,0.95fr)_8.25rem_11.25rem]";
+
+const TITLE_COLS =
+  "grid-cols-[minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,0.95fr)_5.75rem]";
 
 const HEADER_CELL =
-  "flex h-9 min-w-0 items-center text-[11px] font-medium tracking-[0.05em] text-muted uppercase";
+  "flex h-8 min-w-0 items-center text-[11px] font-medium tracking-[0.05em] text-muted uppercase";
 
-const ROW_CELL = "flex min-h-14 min-w-0 items-center py-2.5";
+const ROW_CELL = "flex min-h-11 min-w-0 items-center py-1.5";
+
+const TITLE_CELL = "flex min-h-10 min-w-0 items-center py-1.5";
 
 export function ReviewWorkspace() {
   const router = useRouter();
@@ -34,6 +43,7 @@ export function ReviewWorkspace() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [decline, setDecline] = useState<DocumentItem | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (role && !isAdmin(role)) router.replace("/documents");
@@ -41,15 +51,21 @@ export function ReviewWorkspace() {
 
   useEffect(() => {
     if (!isAdmin(role)) return;
-    setLoading(true);
+    let live = true;
     void listReviews()
       .then(({ items }) => {
+        if (!live) return;
         for (const item of items) upsert(mapDocument(item));
       })
       .catch(() => {
         // Heartbeat owns connection.
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+    };
   }, [role, upsert]);
 
   const pending = useMemo(() => {
@@ -63,6 +79,8 @@ export function ReviewWorkspace() {
       return hay.includes(q);
     });
   }, [items, query]);
+
+  const openId = pending.some((item) => item.id === expandedId) ? expandedId : null;
 
   if (!isAdmin(role)) return null;
 
@@ -89,6 +107,7 @@ export function ReviewWorkspace() {
   };
 
   const reload = () => {
+    if (loading) return;
     setLoading(true);
     void listReviews()
       .then(({ items }) => {
@@ -143,10 +162,11 @@ export function ReviewWorkspace() {
             className={`sticky top-[var(--toolbar-h)] z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
             role="row"
           >
-            <div className={HEADER_CELL}>Title</div>
+            <div className={HEADER_CELL}>User</div>
+            <div className={HEADER_CELL}>Client</div>
             <div className={HEADER_CELL}>ERP</div>
-            <div className={HEADER_CELL}>Member</div>
-            <div className={HEADER_CELL}>Match</div>
+            <div className={HEADER_CELL}>Team</div>
+            <div className={HEADER_CELL}>Duplicate</div>
             <div className={HEADER_CELL}>Uploaded</div>
             <div className={`${HEADER_CELL} justify-end`}>Action</div>
           </div>
@@ -156,6 +176,10 @@ export function ReviewWorkspace() {
                 key={item.id}
                 item={item}
                 busy={busyId === item.id}
+                expanded={openId === item.id}
+                onToggle={() =>
+                  setExpandedId((current) => (current === item.id ? null : item.id))
+                }
                 onApprove={() => void onApprove(item)}
                 onDecline={() => setDecline(item)}
               />
@@ -194,87 +218,263 @@ function EmptyState({ query }: { query: string }) {
   );
 }
 
-function firstMatch(item: DocumentItem): DuplicateMatch | undefined {
-  return item.sources.find((source) => source.uniqueness === "duplicate")?.duplicates[0];
+function allMatches(item: DocumentItem): DuplicateMatch[] {
+  const out: DuplicateMatch[] = [];
+  const seen = new Set<string>();
+  for (const source of item.sources) {
+    for (const match of source.duplicates) {
+      if (seen.has(match.id)) continue;
+      seen.add(match.id);
+      out.push(match);
+    }
+  }
+  return out;
 }
 
-function ReviewRow({
+function dash(value: string | undefined) {
+  const next = value?.trim() ?? "";
+  return next.length > 0 ? next : "—";
+}
+
+function reviewSources(item: DocumentItem): SourceFile[] {
+  const dups = item.sources.filter(
+    (source) => source.duplicates.length > 0 || source.uniqueness === "duplicate",
+  );
+  return dups.length > 0 ? dups : item.sources;
+}
+
+function matchSummary(matches: DuplicateMatch[]) {
+  if (matches.length === 0) return "Duplicate";
+  const erps: string[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    const erp = match.erp.trim();
+    if (!erp || seen.has(erp)) continue;
+    seen.add(erp);
+    erps.push(erp);
+  }
+  const count = `${matches.length} ${matches.length === 1 ? "match" : "matches"}`;
+  return erps.length > 0 ? `${count} · ${erps.join(", ")}` : count;
+}
+
+function stopRow(event: React.SyntheticEvent) {
+  event.stopPropagation();
+}
+
+function hasTextSelection() {
+  const value = window.getSelection()?.toString();
+  return Boolean(value && value.length > 0);
+}
+
+const ReviewRow = memo(function ReviewRow({
   item,
   busy,
+  expanded,
+  onToggle,
   onApprove,
   onDecline,
 }: {
   item: DocumentItem
   busy: boolean
+  expanded: boolean
+  onToggle: () => void
   onApprove: () => void
   onDecline: () => void
 }) {
-  const match = firstMatch(item);
-  const openView = useDocumentsStore((s) => s.openView);
-  const openCompare = useDocumentsStore((s) => s.openCompare);
-  const compareSource = item.sources.find((source) => source.duplicates.length > 0);
+  const matches = allMatches(item);
+  const sources = reviewSources(item);
+  const summary = matchSummary(matches);
+  const requested = item.reviewRequestedAt
+    ? formatDateTime(item.reviewRequestedAt)
+    : "";
+  const openClass = statusMeta("pending_review").openClass;
+  const hold = useAccordionHold(expanded);
+  const openView = () => useDocumentsStore.getState().openView(item.id);
+  const openCompare = (sourceId: string) => {
+    if (busy) return;
+    useDocumentsStore.getState().openCompare(item.id, sourceId);
+  };
+
+  const onRowClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, a, input, label")) return;
+    if (hasTextSelection()) return;
+    onToggle();
+  };
+
+  const onRowKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onToggle();
+  };
 
   return (
-    <div
-      className={`grid ${COLS} gap-x-4 border-b border-[var(--border)] px-4 hover:bg-surface-muted`}
-      role="row"
-    >
-      <div className={ROW_CELL} role="cell">
-        <p className="min-w-0 w-full truncate text-[13px] font-medium tracking-[-0.01em] text-ink">
-          {item.title || "—"}
-        </p>
+    <div className="doc-row border-b border-[var(--border)]">
+      <div
+        role="row"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={onRowClick}
+        onKeyDown={onRowKeyDown}
+        className={`grid ${COLS} cursor-pointer gap-x-4 px-4 outline-none transition-[background-color] duration-[var(--shell-duration)] ease-[var(--shell-ease)] ${
+          expanded ? openClass : "hover:bg-surface-muted focus-visible:bg-surface-muted"
+        }`}
+      >
+        <div className={ROW_CELL} role="cell">
+          <p className="min-w-0 w-full truncate text-[13px] font-medium tracking-[-0.01em] text-ink">
+            {dash(item.member || item.uploader)}
+          </p>
+        </div>
+        <div className={ROW_CELL} role="cell">
+          <p className="min-w-0 w-full truncate text-[13px] text-ink">{dash(item.client)}</p>
+        </div>
+        <div className={ROW_CELL} role="cell">
+          <p className="min-w-0 w-full truncate font-mono text-[12px] tabular-nums text-ink">
+            {dash(item.erp)}
+          </p>
+        </div>
+        <div className={ROW_CELL} role="cell">
+          <p className="min-w-0 w-full truncate text-[13px] text-ink">{dash(item.team)}</p>
+        </div>
+        <div className={ROW_CELL} role="cell">
+          <p className="min-w-0 w-full truncate text-[13px] text-ink" title={summary}>
+            {summary}
+          </p>
+        </div>
+        <div className={ROW_CELL} role="cell">
+          <p className="min-w-0 w-full truncate text-[12px] tabular-nums text-muted">
+            {dash(item.uploaded)}
+          </p>
+        </div>
+        <div
+          className={ROW_CELL}
+          role="cell"
+          onPointerDown={stopRow}
+          onClick={stopRow}
+        >
+          <div className="flex w-full min-w-0 items-center justify-end gap-0.5">
+            <IconBtn label="View" disabled={busy} onClick={openView}>
+              <Eye className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+            </IconBtn>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onDecline}
+              className="inline-flex h-7 w-[4.75rem] shrink-0 items-center justify-center rounded-lg text-[12px] font-medium text-muted outline-none hover:bg-black/[0.06] hover:text-ink disabled:pointer-events-none disabled:opacity-40"
+            >
+              Decline
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onApprove}
+              className="inline-flex h-7 w-[4.75rem] shrink-0 items-center justify-center rounded-lg bg-ink text-[12px] font-medium text-white outline-none hover:bg-black disabled:pointer-events-none disabled:bg-ink/30"
+            >
+              Approve
+            </button>
+          </div>
+        </div>
       </div>
-      <div className={ROW_CELL} role="cell">
-        <p className="min-w-0 w-full truncate font-mono text-[12px] tabular-nums text-ink">
-          {item.erp || "—"}
-        </p>
-      </div>
-      <div className={ROW_CELL} role="cell">
-        <p className="min-w-0 w-full truncate text-[13px] text-ink">{item.member || "—"}</p>
-      </div>
-      <div className={ROW_CELL} role="cell">
-        <p className="min-w-0 w-full truncate text-[13px] text-ink">
-          {match ? [match.erp, match.member || match.client].filter(Boolean).join(" · ") : "Duplicate"}
-        </p>
-      </div>
-      <div className={ROW_CELL} role="cell">
-        <p className="min-w-0 w-full truncate text-[13px] tabular-nums text-muted">
-          {item.uploaded || "—"}
-        </p>
-      </div>
-      <div className={ROW_CELL} role="cell">
-        <div className="flex w-full min-w-0 items-center justify-end gap-0.5">
-          <IconBtn label="View" onClick={() => openView(item.id)}>
-            <Eye className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-          </IconBtn>
-          <IconBtn
-            label="Compare"
-            disabled={!compareSource}
-            onClick={() => compareSource && openCompare(item.id, compareSource.id)}
-          >
-            <GitCompare className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-          </IconBtn>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onDecline}
-            className="inline-flex h-7 w-[4.75rem] shrink-0 items-center justify-center rounded-lg text-[12px] font-medium text-muted outline-none hover:bg-black/[0.06] hover:text-ink disabled:opacity-40"
-          >
-            Decline
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onApprove}
-            className="inline-flex h-7 w-[4.75rem] shrink-0 items-center justify-center rounded-lg bg-ink text-[12px] font-medium text-white outline-none hover:bg-black disabled:bg-ink/30"
-          >
-            Approve
-          </button>
+
+      <div
+        className="doc-accordion"
+        data-open={expanded ? "true" : "false"}
+        aria-hidden={!expanded}
+      >
+        <div className="doc-accordion-inner" inert={!hold || undefined}>
+          <div className={`${statusMeta("pending_review").surface}`}>
+            <div className={`grid ${TITLE_COLS} gap-x-4 px-4`} role="row">
+              <div className={HEADER_CELL}>This file</div>
+              <div className={HEADER_CELL}>Duplicate of</div>
+              <div className={HEADER_CELL}>Match</div>
+              <div className={`${HEADER_CELL} justify-end`}>Action</div>
+            </div>
+            {sources.length === 0 ? (
+              <p className="px-4 py-3 text-[13px] text-muted">No files on this request.</p>
+            ) : (
+              sources.map((source) => {
+                const rows =
+                  source.duplicates.length > 0 ? source.duplicates : [null];
+                return rows.map((match, index) => (
+                  <div
+                    key={`${source.id}:${match?.id ?? "none"}`}
+                    className={`grid ${TITLE_COLS} gap-x-4 px-4`}
+                    role="row"
+                  >
+                    <div className={TITLE_CELL}>
+                      {index === 0 ? (
+                        <p
+                          title={source.title || "Untitled document"}
+                          className="min-w-0 w-full truncate text-[13px] text-ink"
+                        >
+                          {source.title || "Untitled document"}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className={TITLE_CELL}>
+                      <p
+                        title={match?.title || "—"}
+                        className="min-w-0 w-full truncate text-[13px] text-ink"
+                      >
+                        {match?.title || "—"}
+                      </p>
+                    </div>
+                    <div className={TITLE_CELL}>
+                      <p className="min-w-0 w-full truncate text-[12px] text-muted">
+                        {match
+                          ? [match.erp, match.member || match.client, match.score.toFixed(1)]
+                              .filter((part) => part && String(part).trim())
+                              .join(" · ") || "—"
+                          : "—"}
+                      </p>
+                    </div>
+                    <div className={`${TITLE_CELL} justify-end`}>
+                      {index === 0 && source.duplicates.length > 0 ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => openCompare(source.id)}
+                          className="inline-flex h-7 w-[5.75rem] shrink-0 items-center justify-center gap-1 rounded-lg text-[12px] font-medium text-muted outline-none hover:bg-surface hover:text-ink focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-40"
+                        >
+                          <GitCompare className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+                          Compare
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ));
+              })
+            )}
+            {item.reviewNote || requested ? (
+              <div className="border-t border-[var(--border)] px-4 py-2.5">
+                <div className="flex items-baseline gap-3">
+                  <p className="shrink-0 text-[11px] font-medium tracking-[0.05em] text-muted uppercase">
+                    Reason
+                  </p>
+                  {requested ? (
+                    <p className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-soft">
+                      Requested {requested}
+                    </p>
+                  ) : null}
+                </div>
+                {item.reviewNote ? (
+                  <p className="mt-1 min-w-0 text-[13px] leading-5 text-ink">
+                    {item.reviewNote}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[13px] leading-5 text-muted-soft">
+                    No reason given
+                  </p>
+                )}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
   );
-}
+});
 
 function DeclineDialog({
   item,

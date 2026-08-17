@@ -11,10 +11,10 @@ import {
   type ApiSource,
   type InspectResult,
 } from "@/app/lib/api";
-import { anzscoMatches } from "@/app/lib/anzsco";
+import { anzscoMatches, foldSearch } from "@/app/lib/anzsco";
 import { formatDate, formatDateTime } from "@/app/lib/dates";
 import { SOURCE_TOTAL, parseDocumentStatus, parseUniqueness, type DocumentStatus, type SourceUniqueness } from "@/app/lib/files";
-import { useUserStore } from "@/app/store/user-store";
+import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 export type DuplicateMatch = {
   id: string
@@ -58,6 +58,8 @@ export type DocumentItem = {
   url: string
   fileUrl?: string
   sources: SourceFile[]
+  reviewNote?: string
+  reviewRequestedAt?: string
 };
 
 export type NewDocumentInput = {
@@ -68,6 +70,7 @@ export type NewDocumentInput = {
   member: string
   files: File[]
   titles?: string[]
+  note?: string
 };
 
 export type PendingCompare = {
@@ -102,9 +105,9 @@ type DocumentsState = {
   dropLocal: (id: string) => void
   refresh: () => Promise<void>
   addDocument: (input: NewDocumentInput) => Promise<"ok" | "erp" | "files" | "error">
-  addSources: (id: string, files: File[]) => Promise<void>
+  addSources: (id: string, files: File[], note?: string) => Promise<void>
   beginAddSources: (id: string, files: File[]) => Promise<void>
-  confirmPendingAdd: () => Promise<void>
+  confirmPendingAdd: (note?: string) => Promise<void>
   cancelPendingAdd: () => void
   openView: (id: string) => void
   closeView: () => void
@@ -134,22 +137,15 @@ function abortAddInspect(id?: string) {
 
 function matchesQuery(item: DocumentItem, query: string): boolean {
   if (!query) return true;
-  if (
-    item.title.toLowerCase().includes(query) ||
-    item.uploader.toLowerCase().includes(query) ||
-    item.erp.toLowerCase().includes(query) ||
-    item.client.toLowerCase().includes(query) ||
-    item.team.toLowerCase().includes(query) ||
-    item.member.toLowerCase().includes(query) ||
+  return (
+    foldSearch(item.client).includes(query) ||
+    foldSearch(item.team).includes(query) ||
     anzscoMatches(item.anzsco, query)
-  ) {
-    return true;
-  }
-  return item.sources.some((source) => source.title.toLowerCase().includes(query));
+  );
 }
 
 function filterItems(items: DocumentItem[], query: string): DocumentItem[] {
-  const q = query.trim().toLowerCase();
+  const q = foldSearch(query);
   if (!q) return items;
   return items.filter((item) => matchesQuery(item, q));
 }
@@ -226,6 +222,8 @@ export function mapDocument(raw: ApiDocument): DocumentItem {
     url: raw.url,
     fileUrl: raw.file_url,
     sources,
+    reviewNote: raw.review_note?.trim() || undefined,
+    reviewRequestedAt: raw.review_requested_at || undefined,
   };
 }
 
@@ -418,6 +416,8 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     form.set("anzsco", input.anzsco.trim());
     form.set("team", input.team.trim());
     form.set("member", member);
+    const note = input.note?.trim() ?? "";
+    if (note) form.set("note", note);
     appendFiles(form, files, input.titles);
     try {
       const doc = await createDocument(form);
@@ -430,7 +430,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       return "error";
     }
   },
-  addSources: async (id, files) => {
+  addSources: async (id, files, note) => {
     if (files.length === 0) return;
     const current = get().items.find((item) => item.id === id);
     if (!current) return;
@@ -438,6 +438,8 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     if (room <= 0) return;
     const form = new FormData();
     appendFiles(form, files.slice(0, room));
+    const trimmed = note?.trim() ?? "";
+    if (trimmed) form.set("note", trimmed);
     try {
       const doc = await apiAddSources(id, form);
       get().upsert(mapDocument(doc));
@@ -498,13 +500,13 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       if (get().addingToId === id) set({ addingToId: null });
     }
   },
-  confirmPendingAdd: async () => {
+  confirmPendingAdd: async (note) => {
     const pending = get().pendingSourceAdd;
     if (!pending || get().addingToId) return;
     set({ pendingSourceAdd: null, addingToId: pending.docId });
     try {
       if (!get().items.find((item) => item.id === pending.docId)) return;
-      await get().addSources(pending.docId, pending.files);
+      await get().addSources(pending.docId, pending.files, note);
     } finally {
       if (get().addingToId === pending.docId) set({ addingToId: null });
     }
@@ -524,6 +526,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     set({ pendingViewId: null });
   },
   askRemove: (id) => {
+    if (!isAdmin(useUserStore.getState().role)) return;
     const current = get().items.find((item) => item.id === id);
     if (!current || inFlightDeletes.has(id)) return;
     if (get().pendingDeleteId === id) return;
@@ -534,6 +537,10 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     set({ pendingDeleteId: null });
   },
   confirmRemove: async () => {
+    if (!isAdmin(useUserStore.getState().role)) {
+      if (get().pendingDeleteId !== null) set({ pendingDeleteId: null });
+      return;
+    }
     const id = get().pendingDeleteId;
     if (!id) return;
     const current = get().items.find((item) => item.id === id);

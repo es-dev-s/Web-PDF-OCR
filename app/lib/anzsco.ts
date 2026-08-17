@@ -59,14 +59,18 @@ export function formatAnzsco(value: string | undefined) {
   return raw.length > 0 ? raw : "";
 }
 
+export function foldSearch(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 export function anzscoMatches(value: string | undefined, query: string) {
-  const q = query.trim().toLowerCase();
+  const q = foldSearch(query);
   if (!q) return true;
   const match = findAnzsco(value);
-  if (!match) return (value ?? "").toLowerCase().includes(q);
-  return (
-    match.code.includes(q) ||
-    match.title.toLowerCase().includes(q) ||
-    `${match.title} ${match.code}`.toLowerCase().includes(q)
-  );
+  const hay = match ? `${match.title} ${match.code}` : (value ?? "");
+  return foldSearch(hay).includes(q);
 }
