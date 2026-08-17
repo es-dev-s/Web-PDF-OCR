@@ -151,7 +151,7 @@ function ViewBody({ item }: { item: DocumentItem }) {
   const uploaded = item.uploadedAt
     ? formatDateTime(item.uploadedAt) || item.uploaded
     : item.uploaded;
-  const heading = display(item.client) !== "—" ? item.client : item.title;
+  const heading = item.title || item.sources[0]?.title || item.client || "Document";
   const anzsco = findAnzsco(item.anzsco);
 
   return (

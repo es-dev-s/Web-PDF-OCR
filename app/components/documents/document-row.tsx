@@ -86,7 +86,7 @@ export function DocumentsTableHeader() {
       className={`sticky top-[var(--toolbar-h)] z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
       role="row"
     >
-      <div className={HEADER_CELL}>Title</div>
+      <div className={HEADER_CELL}>User</div>
       <div className={HEADER_CELL}>ERP</div>
       <div className={HEADER_CELL}>Status</div>
       <div className={HEADER_CELL}>Source</div>
@@ -380,6 +380,19 @@ const SourceRow = memo(function SourceRow({
   );
 });
 
+function DetailFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-medium tracking-[0.04em] text-muted-soft uppercase">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate text-[13px] text-ink" title={value}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
 function DocumentSources({ item }: { item: DocumentItem }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const addSources = useDocumentsStore((s) => s.beginAddSources);
@@ -418,6 +431,11 @@ function DocumentSources({ item }: { item: DocumentItem }) {
           event.target.value = "";
         }}
       />
+      <div className="grid grid-cols-3 gap-x-4 border-b border-[var(--border)] px-4 py-3">
+        <DetailFact label="Client" value={item.client || "—"} />
+        <DetailFact label="Team" value={item.team || "—"} />
+        <DetailFact label="ANZSCO" value={item.anzsco || "—"} />
+      </div>
       <SourceHeader />
       {sourceSlots(item.sources).map((source, index) => (
         <SourceRow
@@ -501,10 +519,9 @@ export const DocumentRow = memo(function DocumentRow({
         }`}
       >
         <div className={ROW_CELL}>
-          <DocTitle
-            value={item.title || item.sources[0]?.title || "—"}
-            className="w-full text-[13px] font-medium tracking-[-0.01em] text-ink"
-          />
+          <p className="min-w-0 w-full truncate text-[13px] font-medium tracking-[-0.01em] text-ink">
+            {item.member || item.uploader || "—"}
+          </p>
         </div>
         <div className={ROW_CELL}>
           <p className="min-w-0 truncate font-mono text-[12px] tabular-nums text-ink">{item.erp}</p>
