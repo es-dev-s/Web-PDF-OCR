@@ -9,6 +9,7 @@ import { DocTitle } from "@/app/components/documents/doc-title";
 import { inspectFile, suggestTitle } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
 import { SOURCE_TOTAL, uniquenessMeta } from "@/app/lib/files";
+import { documentName, isPrintedTitle } from "@/app/lib/titles";
 import { findTeam } from "@/app/lib/teams";
 import { useChromeStore } from "@/app/store/chrome-store";
 import {
@@ -66,8 +67,7 @@ function useSourceTitles(open: boolean, files: File[]) {
       void suggestTitle(file, ac.signal)
         .then((data) => {
           if (ac.signal.aborted) return;
-          const value =
-            data.ok && data.title?.trim() ? data.title.trim() : file.name;
+          const value = documentName(data);
           setTitles((prev) =>
             prev[key] ? { ...prev, [key]: { pending: false, value } } : prev,
           );
@@ -76,7 +76,7 @@ function useSourceTitles(open: boolean, files: File[]) {
           if (ac.signal.aborted || isAbortError(error)) return;
           setTitles((prev) =>
             prev[key]
-              ? { ...prev, [key]: { pending: false, value: file.name } }
+              ? { ...prev, [key]: { pending: false, value: "Untitled document" } }
               : prev,
           );
         })
@@ -481,7 +481,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
       files,
       titles: files.map((file) => {
         const entry = titles[fileKey(file)];
-        if (!entry || entry.pending) return "";
+        if (!entry || entry.pending || !isPrintedTitle(entry.value)) return "";
         return entry.value;
       }),
     });
@@ -658,7 +658,7 @@ export function AddDocumentDialog({ open, onClose }: Props) {
                       const pending = entry?.pending ?? isPdfFile(file);
                       const title = pending
                         ? "Generating title…"
-                        : entry?.value || file.name;
+                        : entry?.value || "Untitled document";
                       const check = inspect[fileKey(file)];
                       const checking = !check || check.pending;
                       const failed = Boolean(check?.failed);

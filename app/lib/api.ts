@@ -250,9 +250,11 @@ export function eventsUrl() {
 
 export type TitleSuggestion = {
   ok: boolean
-  title?: string
-  title_source?: string
-  filename?: string
+  title?: string | null
+  message?: string | null
+  filename?: string | null
+  title_source?: string | null
+  method?: string | null
 };
 
 export async function suggestTitle(file: File, signal?: AbortSignal): Promise<TitleSuggestion> {

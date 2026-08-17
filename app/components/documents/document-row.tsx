@@ -86,7 +86,7 @@ export function DocumentsTableHeader() {
       className={`sticky top-[var(--toolbar-h)] z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
       role="row"
     >
-      <div className={HEADER_CELL}>Name</div>
+      <div className={HEADER_CELL}>Title</div>
       <div className={HEADER_CELL}>ERP</div>
       <div className={HEADER_CELL}>Status</div>
       <div className={HEADER_CELL}>Source</div>
@@ -502,7 +502,7 @@ export const DocumentRow = memo(function DocumentRow({
       >
         <div className={ROW_CELL}>
           <DocTitle
-            value={item.uploader}
+            value={item.title || item.sources[0]?.title || "—"}
             className="w-full text-[13px] font-medium tracking-[-0.01em] text-ink"
           />
         </div>
