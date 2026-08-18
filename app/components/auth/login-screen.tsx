@@ -18,7 +18,19 @@ export function LoginScreen() {
     const result = await signIn(email, password);
     setBusy(false);
     if (result === "ok") return;
-    setError(result === "auth" ? "Invalid email or password" : "Couldn’t sign in. Try again.");
+    if (result === "auth") {
+      setError("Invalid email or password");
+      return;
+    }
+    if (result === "disabled") {
+      setError("This account is disabled.");
+      return;
+    }
+    if (result === "rate") {
+      setError("Too many attempts. Try again in a few minutes.");
+      return;
+    }
+    setError("Couldn’t sign in. Try again.");
   };
 
   return (

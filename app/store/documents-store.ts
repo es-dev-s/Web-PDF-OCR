@@ -7,6 +7,7 @@ import {
   inspectFiles,
   listDocuments,
   nextErp as fetchNextErp,
+  userFacingApiError,
   type ApiDocument,
   type ApiSource,
   type InspectResult,
@@ -14,7 +15,13 @@ import {
 import { anzscoMatches, foldSearch } from "@/app/lib/anzsco";
 import { formatDate, formatDateTime, toDayKey } from "@/app/lib/dates";
 import { SOURCE_TOTAL, parseDocumentStatus, parseUniqueness, type DocumentStatus, type SourceUniqueness } from "@/app/lib/files";
-import { displayTitle } from "@/app/lib/titles";
+import {
+  alignedTitleWords,
+  displayTitle,
+  isPrintedTitle,
+  isTitlePending,
+  UNREADABLE_TITLE,
+} from "@/app/lib/titles";
 import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 export type DuplicateMatch = {
@@ -32,6 +39,22 @@ export type DuplicateMatch = {
   contentType?: string
   /** Member's reason for keeping this duplicate. Only set on duplicates. */
   note?: string
+  /** Combined history for this file cluster. Documents table uses this. */
+  noteLog?: string
+};
+
+export type TitleSimilarMatch = {
+  id: string
+  sourceId?: string
+  documentId?: string
+  title: string
+  erp: string
+  client?: string
+  member?: string
+  score: number
+  uploaded: string
+  fileUrl?: string
+  contentType?: string
 };
 
 export type SourceFile = {
@@ -43,9 +66,12 @@ export type SourceFile = {
   contentType?: string
   sizeBytes?: number
   duplicates: DuplicateMatch[]
+  titleSimilar: TitleSimilarMatch[]
   fileUrl?: string
   /** Member's reason for keeping this duplicate. Only set on duplicates. */
   note?: string
+  noteLog?: string
+  needsTitle?: boolean
 };
 
 export type DocumentItem = {
@@ -65,6 +91,8 @@ export type DocumentItem = {
   sources: SourceFile[]
   reviewNote?: string
   reviewRequestedAt?: string
+  titlePending?: boolean
+  titleSimilar: TitleSimilarMatch[]
 };
 
 export type NewDocumentInput = {
@@ -75,7 +103,7 @@ export type NewDocumentInput = {
   member: string
   files: File[]
   titles?: string[]
-  note?: string
+  notes?: string[]
 };
 
 export type PendingCompare = {
@@ -89,6 +117,10 @@ export type PendingSourceAdd = {
   results: InspectResult[]
 };
 
+export type WriteResult =
+  | { ok: true }
+  | { ok: false; reason: "erp" | "files" | "error"; message?: string };
+
 type DocumentsState = {
   query: string
   dateFrom: string | null
@@ -100,8 +132,10 @@ type DocumentsState = {
   pendingCompare: PendingCompare | null
   pendingDeleteId: string | null
   pendingViewId: string | null
+  pendingSimilarId: string | null
   pendingSourceAdd: PendingSourceAdd | null
   addingToId: string | null
+  actionError: string
   setQuery: (query: string) => void
   setDateRange: (from: string | null, to: string | null) => void
   toggleExpanded: (id: string) => void
@@ -112,13 +146,17 @@ type DocumentsState = {
   upsert: (item: DocumentItem) => void
   dropLocal: (id: string) => void
   refresh: () => Promise<void>
-  addDocument: (input: NewDocumentInput) => Promise<"ok" | "erp" | "files" | "error">
-  addSources: (id: string, files: File[], note?: string) => Promise<void>
+  addDocument: (input: NewDocumentInput) => Promise<WriteResult>
+  addSources: (id: string, files: File[], notes?: string[]) => Promise<WriteResult>
   beginAddSources: (id: string, files: File[]) => Promise<void>
-  confirmPendingAdd: (note?: string) => Promise<void>
+  confirmPendingAdd: (notes?: string[]) => Promise<WriteResult>
   cancelPendingAdd: () => void
+  clearActionError: () => void
+  resetSession: () => void
   openView: (id: string) => void
   closeView: () => void
+  openSimilar: (id: string) => void
+  closeSimilar: () => void
   askRemove: (id: string) => void
   cancelRemove: () => void
   confirmRemove: () => Promise<void>
@@ -185,6 +223,40 @@ function visibleOf(state: {
   return filterItems(state.items, state.query, state.dateFrom, state.dateTo);
 }
 
+function pruneInspectForItem(
+  inspect: Record<string, true>,
+  item: DocumentItem,
+): Record<string, true> {
+  const prefix = `${item.id}::`;
+  let next: Record<string, true> | null = null;
+  for (const key of Object.keys(inspect)) {
+    if (!key.startsWith(prefix)) continue;
+    const sourceId = key.slice(prefix.length);
+    if (item.sources.some((source) => source.id === sourceId)) continue;
+    if (!next) next = { ...inspect };
+    delete next[key];
+  }
+  return next ?? inspect;
+}
+
+function compareStillOpen(
+  pending: PendingCompare | null,
+  items: DocumentItem[],
+): PendingCompare | null {
+  if (!pending) return null;
+  const item = items.find((row) => row.id === pending.docId);
+  if (!item) return null;
+  if (!item.sources.some((source) => source.id === pending.sourceId)) return null;
+  return pending;
+}
+
+function similarStillOpen(id: string | null, items: DocumentItem[]): string | null {
+  if (!id) return null;
+  const item = items.find((row) => row.id === id);
+  if (!item || item.titleSimilar.length === 0) return null;
+  return id;
+}
+
 export function inspectKey(docId: string, sourceId: string) {
   return `${docId}::${sourceId}`;
 }
@@ -213,10 +285,130 @@ function nextErpCode(items: DocumentItem[]): string {
   return code;
 }
 
+function mapSimilar(match: {
+  id: string
+  source_id?: string
+  document_id?: string
+  title: string
+  erp: string
+  client?: string
+  member?: string
+  score: number
+  uploaded_at: string
+  file_url?: string
+  content_type?: string
+}): TitleSimilarMatch {
+  return {
+    id: match.id,
+    sourceId: match.source_id,
+    documentId: match.document_id,
+    title: displayTitle(match.title),
+    erp: match.erp,
+    client: match.client,
+    member: match.member,
+    score: match.score,
+    uploaded: formatDateTime(match.uploaded_at),
+    fileUrl: match.file_url,
+    contentType: match.content_type,
+  };
+}
+
+function uniqueSimilar(matches: TitleSimilarMatch[]): TitleSimilarMatch[] {
+  const best = new Map<string, TitleSimilarMatch>();
+  for (const match of matches) {
+    const key = match.documentId || match.id;
+    const prev = best.get(key);
+    if (!prev || match.score > prev.score) best.set(key, match);
+  }
+  return [...best.values()].sort((a, b) => b.score - a.score);
+}
+
+function wordSimilar(original: string, similar: string): boolean {
+  const { matched, total } = alignedTitleWords(original, similar);
+  return total > 0 && matched / total >= 0.9;
+}
+
+function titleRank(title: string): number {
+  if (isPrintedTitle(title) || title === UNREADABLE_TITLE) return 2;
+  return 0;
+}
+
+function preferTitle(next: string, prev: string): string {
+  return titleRank(prev) > titleRank(next) ? prev : next;
+}
+
+function hashDecided(source: SourceFile): boolean {
+  return (
+    source.uniqueness === "original" ||
+    source.uniqueness === "duplicate" ||
+    source.duplicates.length > 0 ||
+    source.score != null
+  );
+}
+
+function sourceIdsKey(item: DocumentItem): string {
+  return item.sources
+    .map((source) => source.id)
+    .sort()
+    .join("\0");
+}
+
+function preferSource(prev: SourceFile | undefined, next: SourceFile): SourceFile {
+  if (!prev) return next;
+  const title = preferTitle(next.title, prev.title);
+  const settled = isPrintedTitle(title) || title === UNREADABLE_TITLE;
+  const staleHash = hashDecided(prev) && !hashDecided(next);
+  const weaker =
+    titleRank(next.title) < titleRank(prev.title) || staleHash;
+  return {
+    ...next,
+    title,
+    needsTitle: settled ? false : next.needsTitle,
+    uniqueness: staleHash ? prev.uniqueness : next.uniqueness,
+    score: staleHash ? prev.score : next.score,
+    duplicates: staleHash ? prev.duplicates : next.duplicates,
+    note: staleHash ? prev.note : next.note,
+    noteLog: staleHash ? prev.noteLog : next.noteLog,
+    titleSimilar:
+      weaker && next.titleSimilar.length === 0
+        ? prev.titleSimilar
+        : next.titleSimilar,
+  };
+}
+
+function preferItem(prev: DocumentItem, next: DocumentItem): DocumentItem {
+  const incoming =
+    next.sources.length === 0 && prev.sources.length > 0
+      ? prev.sources
+      : next.sources;
+  const prevById = new Map(prev.sources.map((source) => [source.id, source]));
+  const sources = incoming.map((source) =>
+    preferSource(prevById.get(source.id), source),
+  );
+  const title = preferTitle(next.title, prev.title);
+  const sameSources = sourceIdsKey(prev) === sourceIdsKey(next);
+  const status =
+    next.status === "processing" &&
+    prev.status !== "processing" &&
+    sameSources
+      ? prev.status
+      : next.status;
+  return {
+    ...next,
+    title,
+    fileUrl: next.fileUrl || prev.fileUrl,
+    status,
+    sources,
+    titlePending: isTitlePending(title),
+    titleSimilar: uniqueSimilar(sources.flatMap((source) => source.titleSimilar)),
+  };
+}
+
 function mapSource(source: ApiSource): SourceFile {
+  const title = displayTitle(source.title);
   return {
     id: source.id,
-    title: displayTitle(source.title),
+    title,
     uploaded: formatDateTime(source.uploaded_at),
     score: source.score,
     uniqueness: parseUniqueness(source.uniqueness),
@@ -224,6 +416,8 @@ function mapSource(source: ApiSource): SourceFile {
     sizeBytes: source.size_bytes,
     fileUrl: source.file_url,
     note: source.note?.trim() || undefined,
+    noteLog: source.note_log?.trim() || undefined,
+    needsTitle: isTitlePending(source.title, source.needs_title),
     duplicates: (source.duplicates ?? []).map((match) => ({
       id: match.id,
       sourceId: match.source_id,
@@ -238,12 +432,19 @@ function mapSource(source: ApiSource): SourceFile {
       fileUrl: match.file_url,
       contentType: match.content_type,
       note: match.note?.trim() || undefined,
+      noteLog: match.note_log?.trim() || undefined,
     })),
+    titleSimilar: (source.title_similar ?? [])
+      .map(mapSimilar)
+      .filter((match) => wordSimilar(title, match.title)),
   };
 }
 
 export function mapDocument(raw: ApiDocument): DocumentItem {
   const sources = (raw.sources ?? []).map(mapSource);
+  const titleSimilar = uniqueSimilar(
+    sources.flatMap((source) => source.titleSimilar),
+  );
   return {
     id: raw.id,
     title: displayTitle(raw.title),
@@ -261,13 +462,17 @@ export function mapDocument(raw: ApiDocument): DocumentItem {
     sources,
     reviewNote: raw.review_note?.trim() || undefined,
     reviewRequestedAt: raw.review_requested_at || undefined,
+    titlePending:
+      Boolean(raw.title_pending) || isTitlePending(raw.title),
+    titleSimilar,
   };
 }
 
-function appendFiles(form: FormData, files: File[], titles?: string[]) {
+function appendFiles(form: FormData, files: File[], titles?: string[], notes?: string[]) {
   for (let i = 0; i < files.length; i += 1) {
     form.append("files", files[i]);
     form.append("titles", titles?.[i] ?? "");
+    form.append("notes", notes?.[i] ?? "");
   }
 }
 
@@ -282,8 +487,10 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   pendingCompare: null,
   pendingDeleteId: null,
   pendingViewId: null,
+  pendingSimilarId: null,
   pendingSourceAdd: null,
   addingToId: null,
+  actionError: "",
   setQuery: (query) => {
     if (get().query === query) return;
     set((state) => ({
@@ -337,6 +544,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       pendingCompare: { docId, sourceId },
       pendingDeleteId: null,
       pendingViewId: null,
+      pendingSimilarId: null,
     });
   },
   closeCompare: () => {
@@ -345,10 +553,15 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   },
   replaceAll: (items) => {
     set((state) => {
-      const kept =
+      const keptRaw =
         inFlightDeletes.size === 0
           ? items
           : items.filter((item) => !inFlightDeletes.has(item.id));
+      const prevById = new Map(state.items.map((item) => [item.id, item]));
+      const kept = keptRaw.map((item) => {
+        const prev = prevById.get(item.id);
+        return prev ? preferItem(prev, item) : item;
+      });
       const next = kept.length === 0 ? EMPTY : kept;
       const expandedId =
         state.expandedId && next.some((item) => item.id === state.expandedId)
@@ -364,14 +577,16 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         next.some((item) => item.id === state.pendingViewId)
           ? state.pendingViewId
           : null;
-      const pendingCompare =
-        state.pendingCompare &&
-        next.some(
-          (item) =>
-            item.id === state.pendingCompare?.docId &&
-            item.sources.some((source) => source.id === state.pendingCompare?.sourceId),
-        )
-          ? state.pendingCompare
+      const pendingCompare = compareStillOpen(state.pendingCompare, next);
+      const pendingSimilarId = similarStillOpen(state.pendingSimilarId, next);
+      const pendingSourceAdd =
+        state.pendingSourceAdd &&
+        next.some((item) => item.id === state.pendingSourceAdd?.docId)
+          ? state.pendingSourceAdd
+          : null;
+      const addingToId =
+        state.addingToId && next.some((item) => item.id === state.addingToId)
+          ? state.addingToId
           : null;
       return {
         items: next,
@@ -379,7 +594,10 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         expandedId,
         pendingDeleteId,
         pendingViewId,
+        pendingSimilarId,
         pendingCompare,
+        pendingSourceAdd,
+        addingToId,
       };
     });
   },
@@ -392,11 +610,14 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         index === -1
           ? [item, ...state.items]
           : state.items.map((current) =>
-              current.id === item.id ? item : current,
+              current.id === item.id ? preferItem(current, item) : current,
             );
       return {
         items,
         visibleItems: visibleOf({ ...state, items }),
+        inspect: pruneInspectForItem(state.inspect, item),
+        pendingCompare: compareStillOpen(state.pendingCompare, items),
+        pendingSimilarId: similarStillOpen(state.pendingSimilarId, items),
       };
     });
   },
@@ -417,6 +638,8 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         pendingDeleteId:
           state.pendingDeleteId === id ? null : state.pendingDeleteId,
         pendingViewId: state.pendingViewId === id ? null : state.pendingViewId,
+        pendingSimilarId:
+          state.pendingSimilarId === id ? null : state.pendingSimilarId,
         pendingCompare:
           state.pendingCompare?.docId === id ? null : state.pendingCompare,
         pendingSourceAdd:
@@ -437,10 +660,11 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         refreshAgain = false;
         const snap = mutateGen;
         const { items } = await listDocuments();
-        if (mutateGen !== snap && rounds < 2) {
-          rounds += 1;
+        if (mutateGen !== snap) {
           refreshAgain = true;
-          continue;
+          rounds += 1;
+          if (rounds < 8) continue;
+          break;
         }
         get().replaceAll(items.map(mapDocument));
       } while (refreshAgain);
@@ -453,13 +677,13 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   },
   addDocument: async (input) => {
     const files = input.files.slice(0, SOURCE_TOTAL);
-    if (files.length === 0) return "files";
+    if (files.length === 0) return { ok: false, reason: "files" };
     const erp = input.erp.trim();
-    if (!erp) return "erp";
+    if (!erp) return { ok: false, reason: "erp" };
     const taken = get().items.some(
       (item) => item.erp.toLowerCase() === erp.toLowerCase(),
     );
-    if (taken) return "erp";
+    if (taken) return { ok: false, reason: "erp" };
     const member =
       input.member.trim() || useUserStore.getState().name || "User";
     const form = new FormData();
@@ -468,35 +692,40 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     form.set("anzsco", input.anzsco.trim());
     form.set("team", input.team.trim());
     form.set("member", member);
-    const note = input.note?.trim() ?? "";
-    if (note) form.set("note", note);
-    appendFiles(form, files, input.titles);
+    appendFiles(form, files, input.titles, input.notes);
     try {
       const doc = await createDocument(form);
       get().upsert(mapDocument(doc));
-      return "ok";
+      set({ actionError: "" });
+      return { ok: true };
     } catch (error) {
       if (error instanceof ApiError && error.code === "erp_taken") {
-        return "erp";
+        return { ok: false, reason: "erp" };
       }
-      return "error";
+      const message = userFacingApiError(error);
+      set({ actionError: message });
+      return { ok: false, reason: "error", message };
     }
   },
-  addSources: async (id, files, note) => {
-    if (files.length === 0) return;
+  addSources: async (id, files, notes) => {
+    if (files.length === 0) return { ok: false, reason: "files" };
     const current = get().items.find((item) => item.id === id);
-    if (!current) return;
+    if (!current) return { ok: false, reason: "error", message: "Document is gone." };
     const room = SOURCE_TOTAL - current.sources.length;
-    if (room <= 0) return;
+    if (room <= 0) {
+      return { ok: false, reason: "error", message: "You can attach at most 4 sources." };
+    }
     const form = new FormData();
-    appendFiles(form, files.slice(0, room));
-    const trimmed = note?.trim() ?? "";
-    if (trimmed) form.set("note", trimmed);
+    appendFiles(form, files.slice(0, room), undefined, notes?.slice(0, room));
     try {
       const doc = await apiAddSources(id, form);
       get().upsert(mapDocument(doc));
-    } catch {
-      // Live events / refresh recover.
+      set({ actionError: "" });
+      return { ok: true };
+    } catch (error) {
+      const message = userFacingApiError(error);
+      set({ actionError: message });
+      return { ok: false, reason: "error", message };
     }
   },
   beginAddSources: async (id, files) => {
@@ -521,10 +750,11 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       const seen = new Set<string>();
       for (let i = 0; i < slice.length; i += 1) {
         const result = results[i];
+        if (!result?.ok) continue;
         const digest = result.digest ?? "";
         const intra = digest !== "" && seen.has(digest);
         if (digest) seen.add(digest);
-        if (result.ok && (intra || result.uniqueness === "duplicate")) {
+        if (intra || result.uniqueness === "duplicate") {
           dupFiles.push(slice[i]);
           dupResults.push(result);
           continue;
@@ -532,7 +762,13 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         unique.push(slice[i]);
       }
       if (unique.length > 0) {
-        await get().addSources(id, unique);
+        const written = await get().addSources(id, unique);
+        if (!written.ok) {
+          set({
+            actionError:
+              written.message || "Couldn’t add those files. Try again.",
+          });
+        }
       }
       if (dupFiles.length > 0 && get().items.find((item) => item.id === id)) {
         set({
@@ -542,8 +778,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       if (error instanceof Error && error.name === "AbortError") return;
-      if (!get().items.find((item) => item.id === id)) return;
-      await get().addSources(id, slice);
+      set({ actionError: userFacingApiError(error) });
     } finally {
       if (addInspectDoc === id) {
         addInspectCtl = null;
@@ -552,13 +787,20 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       if (get().addingToId === id) set({ addingToId: null });
     }
   },
-  confirmPendingAdd: async (note) => {
+  confirmPendingAdd: async (notes) => {
     const pending = get().pendingSourceAdd;
-    if (!pending || get().addingToId) return;
-    set({ pendingSourceAdd: null, addingToId: pending.docId });
+    if (!pending || get().addingToId) {
+      return { ok: false, reason: "error", message: "Nothing to add." };
+    }
+    set({ addingToId: pending.docId, actionError: "" });
     try {
-      if (!get().items.find((item) => item.id === pending.docId)) return;
-      await get().addSources(pending.docId, pending.files, note);
+      if (!get().items.find((item) => item.id === pending.docId)) {
+        set({ pendingSourceAdd: null });
+        return { ok: false, reason: "error", message: "Document is gone." };
+      }
+      const result = await get().addSources(pending.docId, pending.files, notes);
+      if (result.ok) set({ pendingSourceAdd: null });
+      return result;
     } finally {
       if (get().addingToId === pending.docId) set({ addingToId: null });
     }
@@ -567,22 +809,52 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     if (get().pendingSourceAdd === null) return;
     set({ pendingSourceAdd: null });
   },
+  clearActionError: () => {
+    if (!get().actionError) return;
+    set({ actionError: "" });
+  },
+  resetSession: () => {
+    abortAddInspect();
+    set({
+      items: EMPTY,
+      visibleItems: EMPTY,
+      expandedId: null,
+      inspect: {},
+      pendingCompare: null,
+      pendingDeleteId: null,
+      pendingViewId: null,
+      pendingSimilarId: null,
+      pendingSourceAdd: null,
+      addingToId: null,
+      actionError: "",
+    });
+  },
   openView: (id) => {
     const current = get().items.find((item) => item.id === id);
     if (!current) return;
     if (get().pendingViewId === id) return;
-    set({ pendingViewId: id, pendingDeleteId: null, pendingCompare: null });
+    set({ pendingViewId: id, pendingDeleteId: null, pendingCompare: null, pendingSimilarId: null });
   },
   closeView: () => {
     if (get().pendingViewId === null) return;
     set({ pendingViewId: null });
+  },
+  openSimilar: (id) => {
+    const current = get().items.find((item) => item.id === id);
+    if (!current || current.titleSimilar.length === 0) return;
+    if (get().pendingSimilarId === id) return;
+    set({ pendingSimilarId: id, pendingDeleteId: null, pendingCompare: null, pendingViewId: null });
+  },
+  closeSimilar: () => {
+    if (get().pendingSimilarId === null) return;
+    set({ pendingSimilarId: null });
   },
   askRemove: (id) => {
     if (!isAdmin(useUserStore.getState().role)) return;
     const current = get().items.find((item) => item.id === id);
     if (!current || inFlightDeletes.has(id)) return;
     if (get().pendingDeleteId === id) return;
-    set({ pendingDeleteId: id, pendingViewId: null, pendingCompare: null });
+    set({ pendingDeleteId: id, pendingViewId: null, pendingCompare: null, pendingSimilarId: null });
   },
   cancelRemove: () => {
     if (get().pendingDeleteId === null) return;

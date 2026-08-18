@@ -13,6 +13,10 @@ function backendOrigin() {
 }
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // Engine title extraction often exceeds the default 30s rewrite proxy.
+    proxyTimeout: 180_000,
+  },
   async rewrites() {
     return [
       {

@@ -67,10 +67,7 @@ export function DateFilterButton() {
   const bounds = rangeBounds(dateFrom, dateTo, hover);
 
   useEffect(() => {
-    if (!open) {
-      setHover(null);
-      return;
-    }
+    if (!open) return;
     const node = buttonRef.current;
     if (node) {
       const rect = node.getBoundingClientRect();
@@ -86,13 +83,17 @@ export function DateFilterButton() {
     if (year && month) setView({ year, month: month - 1 });
 
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        setHover(null);
+      }
     };
     const onPointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (buttonRef.current?.contains(target)) return;
       if (panelRef.current?.contains(target)) return;
       setOpen(false);
+      setHover(null);
     };
     document.addEventListener("keydown", onKey);
     document.addEventListener("pointerdown", onPointer);
@@ -105,16 +106,20 @@ export function DateFilterButton() {
   useEffect(() => {
     if (!open || !admin) return;
     const ac = new AbortController();
-    setStatsFailed(false);
-    setStats(null);
     const from = dateFrom ?? undefined;
     const to = dateTo ?? dateFrom ?? undefined;
     void uploadStats(from, to)
       .then((data) => {
-        if (!ac.signal.aborted) setStats(data);
+        if (!ac.signal.aborted) {
+          setStats(data);
+          setStatsFailed(false);
+        }
       })
       .catch(() => {
-        if (!ac.signal.aborted) setStatsFailed(true);
+        if (!ac.signal.aborted) {
+          setStats(null);
+          setStatsFailed(true);
+        }
       });
     return () => ac.abort();
   }, [open, admin, dateFrom, dateTo]);
@@ -140,7 +145,10 @@ export function DateFilterButton() {
         aria-label="Filter by date"
         title="Filter by date"
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          setOpen((current) => !current);
+          setHover(null);
+        }}
         className={`flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-[color,background-color] duration-[var(--shell-duration)] ease-[var(--shell-ease)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${
           open || active
             ? "bg-black/[0.06] text-ink"

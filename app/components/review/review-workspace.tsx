@@ -1,16 +1,18 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { Eye, GitCompare, RotateCw, ScanSearch, Search } from "lucide-react";
 import { CompareDocumentDialog } from "@/app/components/documents/compare-document-dialog";
+import { DuplicateNote, distinctNote, noteLines } from "@/app/components/documents/duplicate-note";
 import { IconBtn } from "@/app/components/documents/icon-btn";
 import { ViewDocumentDialog } from "@/app/components/documents/view-document-dialog";
 import { formatDateTime } from "@/app/lib/dates";
 import { statusMeta } from "@/app/lib/files";
 import { useAccordionHold } from "@/app/hooks/use-accordion-hold";
-import { approveReview, listReviews, rejectReview } from "@/app/lib/api";
+import { useVirtualWindow } from "@/app/hooks/use-virtual-window";
+import { approveReview, rejectReview } from "@/app/lib/api";
 import {
   mapDocument,
   useDocumentsStore,
@@ -21,7 +23,7 @@ import {
 import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 const COLS =
-  "grid-cols-[minmax(8rem,1.05fr)_minmax(0,1.05fr)_minmax(0,0.7fr)_minmax(0,0.85fr)_minmax(0,0.95fr)_8.25rem_11.25rem]";
+  "grid-cols-[minmax(8rem,1.05fr)_minmax(7rem,1.05fr)_minmax(6.75rem,0.7fr)_minmax(6rem,0.85fr)_minmax(7rem,0.95fr)_8.25rem_11.25rem]";
 
 const TITLE_COLS =
   "grid-cols-[minmax(0,1.35fr)_minmax(0,1.35fr)_minmax(0,0.95fr)_5.75rem]";
@@ -38,12 +40,15 @@ export function ReviewWorkspace() {
   const role = useUserStore((s) => s.role);
   const upsert = useDocumentsStore((s) => s.upsert);
   const dropLocal = useDocumentsStore((s) => s.dropLocal);
+  const refresh = useDocumentsStore((s) => s.refresh);
   const items = useDocumentsStore((s) => s.items);
   const [query, setQuery] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actionError, setActionError] = useState("");
   const [decline, setDecline] = useState<DocumentItem | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const loadGen = useRef(0);
 
   useEffect(() => {
     if (role && !isAdmin(role)) router.replace("/documents");
@@ -51,22 +56,14 @@ export function ReviewWorkspace() {
 
   useEffect(() => {
     if (!isAdmin(role)) return;
-    let live = true;
-    void listReviews()
-      .then(({ items }) => {
-        if (!live) return;
-        for (const item of items) upsert(mapDocument(item));
-      })
-      .catch(() => {
-        // Heartbeat owns connection.
-      })
-      .finally(() => {
-        if (live) setLoading(false);
-      });
+    const gen = ++loadGen.current;
+    void refresh().finally(() => {
+      if (gen === loadGen.current) setLoading(false);
+    });
     return () => {
-      live = false;
+      loadGen.current += 1;
     };
-  }, [role, upsert]);
+  }, [role, refresh]);
 
   const pending = useMemo(() => {
     const rows = items.filter((item) => item.status === "pending_review");
@@ -81,14 +78,48 @@ export function ReviewWorkspace() {
   }, [items, query]);
 
   const openId = pending.some((item) => item.id === expandedId) ? expandedId : null;
+  const declineItem =
+    decline && pending.some((item) => item.id === decline.id) ? decline : null;
 
-  if (!isAdmin(role)) return null;
+  const estimate = useCallback(
+    (index: number) => {
+      const item = pending[index];
+      if (!item) return 45;
+      if (item.id !== expandedId) return 45;
+      const sources = reviewSources(item);
+      let extra = 48;
+      for (const source of sources) {
+        extra += Math.max(1, source.duplicates.length) * 40;
+        extra += 36 + Math.max(1, noteLines(source.note).length) * 22;
+      }
+      if (item.reviewRequestedAt) extra += 24;
+      return 45 + extra;
+    },
+    [pending, expandedId],
+  );
+  const virtual = useVirtualWindow(
+    pending.length,
+    estimate,
+    14,
+    expandedId ?? "",
+  );
+
+  if (!isAdmin(role)) {
+    return (
+      <div className="flex min-h-full min-w-0 items-center justify-center text-[13px] text-muted">
+        {role ? "Redirecting…" : "Loading…"}
+      </div>
+    );
+  }
 
   const onApprove = async (item: DocumentItem) => {
     if (busyId) return;
     setBusyId(item.id);
+    setActionError("");
     try {
       upsert(mapDocument(await approveReview(item.id)));
+    } catch {
+      setActionError("Could not approve this duplicate. Try again.");
     } finally {
       setBusyId(null);
     }
@@ -97,28 +128,29 @@ export function ReviewWorkspace() {
   const onReject = async (item: DocumentItem) => {
     if (busyId) return;
     setBusyId(item.id);
+    setActionError("");
     try {
       await rejectReview(item.id);
       dropLocal(item.id);
       setDecline(null);
+    } catch {
+      setActionError("Could not decline this duplicate. Try again.");
     } finally {
       setBusyId(null);
     }
   };
 
   const reload = () => {
-    if (loading) return;
+    const gen = ++loadGen.current;
     setLoading(true);
-    void listReviews()
-      .then(({ items }) => {
-        for (const item of items) upsert(mapDocument(item));
-      })
-      .finally(() => setLoading(false));
+    void refresh().finally(() => {
+      if (gen === loadGen.current) setLoading(false);
+    });
   };
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col">
-      <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-3 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-3 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
         <label className="relative block min-w-0 flex-1">
           <Search
             className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-soft"
@@ -140,6 +172,11 @@ export function ReviewWorkspace() {
           <span className="inline-flex h-8 w-[7.5rem] shrink-0 items-center text-[12px] leading-none tabular-nums text-muted">
             {pending.length} {pending.length === 1 ? "row" : "rows"}
           </span>
+          {actionError ? (
+            <span className="max-w-[16rem] truncate text-[12px] text-muted" title={actionError}>
+              {actionError}
+            </span>
+          ) : null}
           <button
             type="button"
             aria-label="Reload"
@@ -157,33 +194,44 @@ export function ReviewWorkspace() {
       {pending.length === 0 ? (
         <EmptyState query={query} />
       ) : (
-        <div className="w-full min-w-0" role="table" aria-label="Pending reviews">
-          <div
-            className={`sticky top-[var(--toolbar-h)] z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
-            role="row"
-          >
-            <div className={HEADER_CELL}>User</div>
-            <div className={HEADER_CELL}>Client</div>
-            <div className={HEADER_CELL}>ERP</div>
-            <div className={HEADER_CELL}>Team</div>
-            <div className={HEADER_CELL}>Duplicate</div>
-            <div className={HEADER_CELL}>Uploaded</div>
-            <div className={`${HEADER_CELL} justify-end`}>Action</div>
-          </div>
-          <div role="rowgroup">
-            {pending.map((item) => (
-              <ReviewRow
-                key={item.id}
-                item={item}
-                busy={busyId === item.id}
-                expanded={openId === item.id}
-                onToggle={() =>
-                  setExpandedId((current) => (current === item.id ? null : item.id))
-                }
-                onApprove={() => void onApprove(item)}
-                onDecline={() => setDecline(item)}
-              />
-            ))}
+        <div
+          ref={virtual.ref}
+          className="shell-scroll min-h-0 flex-1 overflow-auto overscroll-contain"
+        >
+          <div className="w-full min-w-[62rem]" role="table" aria-label="Pending reviews">
+            <div
+              className={`sticky top-0 z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
+              role="row"
+            >
+              <div className={HEADER_CELL}>User</div>
+              <div className={HEADER_CELL}>Client</div>
+              <div className={HEADER_CELL}>ERP</div>
+              <div className={HEADER_CELL}>Team</div>
+              <div className={HEADER_CELL}>Duplicate</div>
+              <div className={HEADER_CELL}>Uploaded</div>
+              <div className={`${HEADER_CELL} justify-end`}>Action</div>
+            </div>
+            <div role="rowgroup">
+              {virtual.padTop > 0 ? (
+                <div aria-hidden style={{ height: virtual.padTop }} />
+              ) : null}
+              {pending.slice(virtual.start, virtual.end).map((item) => (
+                <ReviewRow
+                  key={item.id}
+                  item={item}
+                  busy={busyId === item.id}
+                  expanded={openId === item.id}
+                  onToggle={() =>
+                    setExpandedId((current) => (current === item.id ? null : item.id))
+                  }
+                  onApprove={() => void onApprove(item)}
+                  onDecline={() => setDecline(item)}
+                />
+              ))}
+              {virtual.padBottom > 0 ? (
+                <div aria-hidden style={{ height: virtual.padBottom }} />
+              ) : null}
+            </div>
           </div>
         </div>
       )}
@@ -191,10 +239,10 @@ export function ReviewWorkspace() {
       <ViewDocumentDialog />
       <CompareDocumentDialog />
       <DeclineDialog
-        item={decline}
-        busy={busyId === decline?.id}
+        item={declineItem}
+        busy={busyId === declineItem?.id}
         onClose={() => setDecline(null)}
-        onConfirm={() => decline && void onReject(decline)}
+        onConfirm={() => declineItem && void onReject(declineItem)}
       />
     </div>
   );
@@ -287,6 +335,7 @@ const ReviewRow = memo(function ReviewRow({
   const requested = item.reviewRequestedAt
     ? formatDateTime(item.reviewRequestedAt)
     : "";
+  const who = item.member || item.uploader;
   const openClass = statusMeta("pending_review").openClass;
   const hold = useAccordionHold(expanded);
   const openView = () => useDocumentsStore.getState().openView(item.id);
@@ -396,78 +445,115 @@ const ReviewRow = memo(function ReviewRow({
               sources.map((source) => {
                 const rows =
                   source.duplicates.length > 0 ? source.duplicates : [null];
-                return rows.map((match, index) => (
+                const own = noteLines(source.note);
+                return (
                   <div
-                    key={`${source.id}:${match?.id ?? "none"}`}
-                    className={`grid ${TITLE_COLS} gap-x-4 px-4`}
-                    role="row"
+                    key={source.id}
+                    className="border-t border-[var(--border)] first:border-t-0"
                   >
-                    <div className={TITLE_CELL}>
-                      {index === 0 ? (
-                        <p
-                          title={source.title || "Untitled document"}
-                          className="min-w-0 w-full truncate text-[13px] text-ink"
+                    {rows.map((match, index) => {
+                      const matchOwn = distinctNote(match?.note, source.note);
+                      return (
+                        <div
+                          key={`${source.id}:${match?.id ?? "none"}`}
+                          className={`grid ${TITLE_COLS} gap-x-4 px-4`}
+                          role="row"
                         >
-                          {source.title || "Untitled document"}
+                          <div className={TITLE_CELL}>
+                            {index === 0 ? (
+                              <div className="flex min-w-0 w-full items-center gap-1">
+                                <p
+                                  title={source.title || "Untitled document"}
+                                  className="min-w-0 flex-1 truncate text-[13px] text-ink"
+                                >
+                                  {source.title || "Untitled document"}
+                                </p>
+                                {source.note?.trim() ? (
+                                  <DuplicateNote
+                                    note={source.note}
+                                    who={who}
+                                    compact
+                                    heading="This file"
+                                  />
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className={TITLE_CELL}>
+                            <div className="flex min-w-0 w-full items-center gap-1">
+                              <p
+                                title={match?.title || "—"}
+                                className="min-w-0 flex-1 truncate text-[13px] text-ink"
+                              >
+                                {match?.title || "—"}
+                              </p>
+                              {matchOwn ? (
+                                <DuplicateNote
+                                  note={matchOwn}
+                                  who={match?.member}
+                                  compact
+                                  heading="Existing file"
+                                />
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className={TITLE_CELL}>
+                            <p className="min-w-0 w-full truncate text-[12px] text-muted">
+                              {match
+                                ? [match.erp, match.member || match.client, match.score.toFixed(1)]
+                                    .filter((part) => part && String(part).trim())
+                                    .join(" · ") || "—"
+                                : "—"}
+                            </p>
+                          </div>
+                          <div className={`${TITLE_CELL} justify-end`}>
+                            {index === 0 && source.duplicates.length > 0 ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => openCompare(source.id)}
+                                className="inline-flex h-7 w-[5.75rem] shrink-0 items-center justify-center gap-1 rounded-lg text-[12px] font-medium text-muted outline-none hover:bg-surface hover:text-ink focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-40"
+                              >
+                                <GitCompare className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+                                Compare
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="px-4 pb-2.5 pt-0.5">
+                      <p className="text-[11px] font-medium tracking-[0.05em] text-muted uppercase">
+                        Reason · {source.title || "Untitled document"}
+                      </p>
+                      {own.length > 0 ? (
+                        <ol className="mt-1.5 space-y-1.5">
+                          {own.map((line, index) => (
+                            <li
+                              key={`${source.id}:${index}:${line}`}
+                              className="flex gap-2 text-[13px] leading-5 text-ink"
+                            >
+                              <span className="w-4 shrink-0 tabular-nums text-muted-soft">
+                                {index + 1}.
+                              </span>
+                              <span className="min-w-0 wrap-anywhere">{line}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="mt-1 text-[13px] leading-5 text-muted-soft">
+                          No reason given for this file.
                         </p>
-                      ) : null}
-                    </div>
-                    <div className={TITLE_CELL}>
-                      <p
-                        title={match?.title || "—"}
-                        className="min-w-0 w-full truncate text-[13px] text-ink"
-                      >
-                        {match?.title || "—"}
-                      </p>
-                    </div>
-                    <div className={TITLE_CELL}>
-                      <p className="min-w-0 w-full truncate text-[12px] text-muted">
-                        {match
-                          ? [match.erp, match.member || match.client, match.score.toFixed(1)]
-                              .filter((part) => part && String(part).trim())
-                              .join(" · ") || "—"
-                          : "—"}
-                      </p>
-                    </div>
-                    <div className={`${TITLE_CELL} justify-end`}>
-                      {index === 0 && source.duplicates.length > 0 ? (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => openCompare(source.id)}
-                          className="inline-flex h-7 w-[5.75rem] shrink-0 items-center justify-center gap-1 rounded-lg text-[12px] font-medium text-muted outline-none hover:bg-surface hover:text-ink focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:pointer-events-none disabled:opacity-40"
-                        >
-                          <GitCompare className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-                          Compare
-                        </button>
-                      ) : null}
+                      )}
                     </div>
                   </div>
-                ));
+                );
               })
             )}
-            {item.reviewNote || requested ? (
-              <div className="border-t border-[var(--border)] px-4 py-2.5">
-                <div className="flex items-baseline gap-3">
-                  <p className="shrink-0 text-[11px] font-medium tracking-[0.05em] text-muted uppercase">
-                    Reason
-                  </p>
-                  {requested ? (
-                    <p className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-soft">
-                      Requested {requested}
-                    </p>
-                  ) : null}
-                </div>
-                {item.reviewNote ? (
-                  <p className="mt-1 min-w-0 text-[13px] leading-5 text-ink">
-                    {item.reviewNote}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-[13px] leading-5 text-muted-soft">
-                    No reason given
-                  </p>
-                )}
-              </div>
+            {requested ? (
+              <p className="border-t border-[var(--border)] px-4 py-2 text-[11px] tabular-nums text-muted-soft">
+                Requested {requested}
+              </p>
             ) : null}
           </div>
         </div>

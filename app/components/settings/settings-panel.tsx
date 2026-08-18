@@ -52,7 +52,8 @@ export function SettingsPanel() {
   const driver = health?.checks?.storage_driver ?? "local";
 
   return (
-    <div className="mx-auto w-full max-w-lg px-5 py-8 sm:px-8">
+    <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-5 py-8 sm:px-8">
+      <div className="mx-auto w-full max-w-lg">
       <h2 className="text-[15px] font-semibold tracking-[-0.02em] text-ink">
         Settings
       </h2>
@@ -94,6 +95,7 @@ export function SettingsPanel() {
           subtitle="PDF title extraction"
           value={labelFor(online ? health?.checks?.engine : "down", "Checking")}
         />
+      </div>
       </div>
     </div>
   );

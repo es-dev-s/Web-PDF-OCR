@@ -3,8 +3,9 @@
 import { memo, useCallback, useRef } from "react";
 import { Eye, FolderOpen, GitCompare, Link2, Plus, Trash2 } from "lucide-react";
 import { DocTitle } from "@/app/components/documents/doc-title";
-import { DuplicateNote } from "@/app/components/documents/duplicate-note";
+import { DuplicateNote, historyNote } from "@/app/components/documents/duplicate-note";
 import { IconBtn } from "@/app/components/documents/icon-btn";
+import { publicDocumentURL } from "@/app/lib/api";
 import { findAnzsco } from "@/app/lib/anzsco";
 import { SOURCE_TOTAL, isHashPending, statusMeta, uniquenessMeta, type SourceUniqueness, type StatusTone } from "@/app/lib/files";
 import { useAccordionHold } from "@/app/hooks/use-accordion-hold";
@@ -18,10 +19,10 @@ import {
 } from "@/app/store/documents-store";
 
 export const COLS =
-  "grid-cols-[minmax(10rem,1.45fr)_minmax(0,0.85fr)_minmax(0,0.9fr)_minmax(0,0.7fr)_minmax(0,0.9fr)_auto]";
+  "grid-cols-[minmax(8.5rem,1.25fr)_minmax(6.75rem,0.7fr)_7.25rem_4.75rem_minmax(6.5rem,0.65fr)_3.75rem_8.75rem]";
 
 const SOURCE_COLS =
-  "grid-cols-[minmax(0,1.5fr)_minmax(0,0.95fr)_9.5rem_4.25rem_8.75rem_9.5rem]";
+  "grid-cols-[minmax(0,1.4fr)_minmax(0,0.9fr)_8.75rem_4.25rem_8.75rem_9.5rem]";
 
 const ACTION_SLOT = "flex w-full min-w-0 items-center justify-end gap-1";
 
@@ -67,14 +68,6 @@ function openExternal(href: string) {
   window.open(href, "_blank", "noopener,noreferrer");
 }
 
-function sourceSlots(sources: SourceFile[]): Array<SourceFile | null> {
-  const slots: Array<SourceFile | null> = [null, null, null, null];
-  for (let i = 0; i < SOURCE_TOTAL; i += 1) {
-    slots[i] = sources[i] ?? null;
-  }
-  return slots;
-}
-
 function stopRow(event: React.SyntheticEvent) {
   event.stopPropagation();
 }
@@ -87,7 +80,7 @@ function hasTextSelection() {
 export function DocumentsTableHeader() {
   return (
     <div
-      className={`sticky top-[var(--toolbar-h)] z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
+        className={`sticky top-0 z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
       role="row"
     >
       <div className={HEADER_CELL}>User</div>
@@ -95,6 +88,7 @@ export function DocumentsTableHeader() {
       <div className={HEADER_CELL}>Status</div>
       <div className={HEADER_CELL}>Source</div>
       <div className={HEADER_CELL}>Uploaded</div>
+      <div className={HEADER_CELL}>Similar</div>
       <div className={`${HEADER_CELL} justify-end`}>Action</div>
     </div>
   );
@@ -228,7 +222,11 @@ function SourceStatus({
     <span className="flex min-w-0 items-center gap-1">
       {pill}
       {source.uniqueness === "duplicate" ? (
-        <DuplicateNote note={source.note} who={member} compact />
+        <DuplicateNote
+          note={historyNote(source.note, source.noteLog)}
+          who={member}
+          compact
+        />
       ) : null}
     </span>
   );
@@ -263,8 +261,13 @@ function DuplicateDetails({ matches }: { matches: DuplicateMatch[] }) {
           <div className={SOURCE_BODY_CELL}>
             <span className="flex min-w-0 items-center gap-1">
               <UniquenessPill value={match.uniqueness} />
-              {match.uniqueness === "duplicate" ? (
-                <DuplicateNote note={match.note} who={match.member} compact />
+              {match.note?.trim() ? (
+                <DuplicateNote
+                  note={match.note}
+                  who={match.member}
+                  compact
+                  heading="Existing file"
+                />
               ) : null}
             </span>
           </div>
@@ -282,29 +285,24 @@ const SourceRow = memo(function SourceRow({
   source,
   client,
   member,
-  canAdd,
   pendingHash,
-  onAdd,
   onCompare,
   onInspect,
 }: {
   docId: string
-  source: SourceFile | null
+  source: SourceFile
   client: string
   member: string
-  canAdd: boolean
   pendingHash: boolean
-  onAdd: () => void
   onCompare: (sourceId: string) => void
   onInspect: (sourceId: string) => void
 }) {
-  const inspecting = useDocumentsStore((s) =>
-    source ? s.inspect[inspectKey(docId, source.id)] === true : false,
+  const inspecting = useDocumentsStore(
+    (s) => s.inspect[inspectKey(docId, source.id)] === true,
   );
   const comparing = useDocumentsStore((s) =>
     Boolean(
-      source &&
-        s.pendingCompare?.docId === docId &&
+      s.pendingCompare?.docId === docId &&
         s.pendingCompare.sourceId === source.id,
     ),
   );
@@ -316,46 +314,37 @@ const SourceRow = memo(function SourceRow({
         role="row"
       >
         <div className={SOURCE_BODY_CELL}>
-          {source ? (
-            <DocTitle
-              value={source.title}
-              className="w-full text-[13px] text-ink"
-            />
-          ) : (
-            <span className="min-w-0 truncate text-[13px] text-muted-soft">
-              Empty slot
-            </span>
-          )}
+          <DocTitle
+            value={source.title}
+            extracting={Boolean(source.needsTitle)}
+            className="w-full text-[13px] text-ink"
+          />
         </div>
         <div className={SOURCE_BODY_CELL}>
-          {source ? <ClientCell value={client} /> : (
-            <span className="w-full truncate text-[13px] text-muted-soft">—</span>
-          )}
+          <ClientCell value={client} />
         </div>
         <div className={SOURCE_BODY_CELL}>
           <p className="w-full truncate text-[12px] tabular-nums text-muted">
-            {source ? source.uploaded : "—"}
+            {source.uploaded}
           </p>
         </div>
         <div className={SOURCE_BODY_CELL}>
           <p className="w-full text-[13px] tabular-nums text-ink">
-            {source && source.score !== null ? source.score.toFixed(1) : "—"}
+            {source.score !== null ? source.score.toFixed(1) : "—"}
           </p>
         </div>
         <div className={SOURCE_BODY_CELL}>
-          {source ? (
-            <SourceStatus
-              source={source}
-              member={member}
-              inspecting={inspecting}
-              pendingHash={pendingHash}
-              onInspect={() => onInspect(source.id)}
-            />
-          ) : null}
+          <SourceStatus
+            source={source}
+            member={member}
+            inspecting={inspecting}
+            pendingHash={pendingHash}
+            onInspect={() => onInspect(source.id)}
+          />
         </div>
         <div className={`${SOURCE_BODY_CELL} justify-end`}>
           <div className={ACTION_SLOT}>
-            {source && source.duplicates.length > 0 ? (
+            {source.duplicates.length > 0 ? (
               <SourceAction
                 label="Compare"
                 widthClass="w-[5.75rem]"
@@ -368,27 +357,16 @@ const SourceRow = memo(function SourceRow({
               <SourceAction
                 label="View"
                 widthClass="w-[5.75rem]"
-                disabled={!source}
                 pressed={comparing}
-                onClick={() => {
-                  if (source) onCompare(source.id);
-                }}
+                onClick={() => onCompare(source.id)}
               >
                 <Eye className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
               </SourceAction>
             )}
-            <SourceAction
-              label="Add"
-              widthClass="w-[3.5rem]"
-              disabled={!canAdd}
-              onClick={onAdd}
-            >
-              <Plus className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-            </SourceAction>
           </div>
         </div>
       </div>
-      {source && source.duplicates.length > 0 ? (
+      {source.duplicates.length > 0 ? (
         <div
           className="doc-accordion"
           data-open={inspecting ? "true" : "false"}
@@ -484,20 +462,39 @@ function DocumentSources({ item }: { item: DocumentItem }) {
         <AnzscoFact value={item.anzsco} />
       </div>
       <SourceHeader />
-      {sourceSlots(item.sources).map((source, index) => (
-        <SourceRow
-          key={source?.id ?? `empty-${item.id}-${index}`}
-          docId={item.id}
-          source={source}
-          client={item.client}
-          member={item.member || item.uploader}
-          canAdd={canAdd}
-          pendingHash={source ? isHashPending(item.status, source) : false}
-          onAdd={onAdd}
-          onCompare={onCompare}
-          onInspect={onInspect}
-        />
-      ))}
+      {item.sources.length === 0 ? (
+        <p className="border-t border-[var(--border)] px-4 py-3 text-[13px] text-muted">
+          No files on this document.
+        </p>
+      ) : (
+        item.sources.map((source) => (
+          <SourceRow
+            key={source.id}
+            docId={item.id}
+            source={source}
+            client={item.client}
+            member={item.member || item.uploader}
+            pendingHash={isHashPending(item.status, source)}
+            onCompare={onCompare}
+            onInspect={onInspect}
+          />
+        ))
+      )}
+      {canAdd ? (
+        <div className="border-t border-[var(--border)] px-4">
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex h-11 w-full items-center gap-2 text-left text-[13px] font-medium text-muted outline-none hover:text-ink focus-visible:text-ink"
+          >
+            <Plus className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
+            Add source
+            <span className="text-[12px] font-normal text-muted-soft">
+              {item.sources.length} / {SOURCE_TOTAL}
+            </span>
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -506,7 +503,7 @@ function DocumentActions({ item }: { item: DocumentItem }) {
   const askRemove = useDocumentsStore((s) => s.askRemove);
   const openView = useDocumentsStore((s) => s.openView);
   const admin = isAdmin(useUserStore((s) => s.role));
-  const fileHref = item.fileUrl ?? item.url;
+  const fileHref = item.fileUrl;
 
   return (
     <div
@@ -517,10 +514,10 @@ function DocumentActions({ item }: { item: DocumentItem }) {
       <IconBtn label="View" onClick={() => openView(item.id)}>
         <Eye className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
       </IconBtn>
-      <IconBtn label="Open URL" onClick={() => openExternal(item.url)}>
+      <IconBtn label="Open URL" onClick={() => openExternal(publicDocumentURL(item.id))}>
         <Link2 className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
       </IconBtn>
-      <IconBtn label="Open file" onClick={() => openExternal(fileHref)}>
+      <IconBtn label="Open file" onClick={() => fileHref && openExternal(fileHref)}>
         <FolderOpen className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
       </IconBtn>
       {admin ? (
@@ -529,6 +526,35 @@ function DocumentActions({ item }: { item: DocumentItem }) {
         </IconBtn>
       ) : null}
     </div>
+  );
+}
+
+function SimilarCount({ item }: { item: DocumentItem }) {
+  const openSimilar = useDocumentsStore((s) => s.openSimilar);
+  const open = useDocumentsStore((s) => s.pendingSimilarId === item.id);
+  const count = item.titleSimilar.length;
+  if (count === 0) {
+    return <p className="w-full text-[13px] tabular-nums text-muted-soft">—</p>;
+  }
+  return (
+    <button
+      type="button"
+      aria-label={`${count} similar titles`}
+      aria-expanded={open}
+      title="Similar titles"
+      onPointerDown={stopRow}
+      onClick={(event) => {
+        event.stopPropagation();
+        openSimilar(item.id);
+      }}
+      className={`inline-flex h-[22px] min-w-[2.5rem] w-full max-w-[3.25rem] shrink-0 items-center justify-center rounded-full px-2 text-[11px] font-medium tabular-nums outline-none transition-[background-color,color] duration-[var(--shell-duration)] ease-[var(--shell-ease)] focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${
+        open
+          ? "bg-[#d7ecf8] text-[#1d6fb8]"
+          : "bg-[#e8f4fc] text-[#1d6fb8] hover:bg-[#d7ecf8]"
+      }`}
+    >
+      <span className="tabular-nums">{count}</span>
+    </button>
   );
 }
 
@@ -582,15 +608,20 @@ export const DocumentRow = memo(function DocumentRow({
           <StatusPill status={tone} />
         </div>
         <div className={ROW_CELL}>
-          <p className="text-[13px] tabular-nums text-ink">
+          <p className="w-full text-[13px] tabular-nums text-ink">
             {item.sources.length}
             <span className="text-muted-soft"> / {SOURCE_TOTAL}</span>
           </p>
         </div>
         <div className={ROW_CELL}>
-          <p className="min-w-0 truncate text-[13px] tabular-nums text-muted">{item.uploaded}</p>
+          <p className="min-w-0 w-full truncate text-[13px] tabular-nums text-muted">
+            {item.uploaded}
+          </p>
         </div>
         <div className={ROW_CELL}>
+          <SimilarCount item={item} />
+        </div>
+        <div className={`${ROW_CELL} justify-end`}>
           <DocumentActions item={item} />
         </div>
       </div>

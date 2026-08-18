@@ -15,7 +15,7 @@ import { useDocumentsStore } from "@/app/store/documents-store";
 import { isAdmin, useUserStore } from "@/app/store/user-store";
 
 const COLS =
-  "grid-cols-[minmax(10rem,1.3fr)_minmax(0,1.25fr)_5.75rem_5.75rem_8.5rem_5.75rem]";
+  "grid-cols-[minmax(10rem,1.3fr)_minmax(10rem,1.25fr)_5.75rem_5.75rem_8.5rem_5.75rem]";
 
 const HEADER_CELL =
   "flex h-9 min-w-0 items-center text-[11px] font-medium tracking-[0.05em] text-muted uppercase";
@@ -38,7 +38,7 @@ function MemberProfile() {
   const initial = name.trim().charAt(0).toUpperCase() || "U";
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-auto overscroll-contain">
       <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center border-b border-[var(--border)] bg-surface px-4">
         <p className="text-[13px] font-medium tracking-[-0.015em] text-ink">Account</p>
       </div>
@@ -95,6 +95,7 @@ function AdminUsers() {
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actionError, setActionError] = useState("");
 
   const refresh = useCallback(async () => {
     const { items } = await listUsers();
@@ -121,9 +122,12 @@ function AdminUsers() {
   const onDisable = async (user: ApiUser) => {
     if (user.id === selfId || busyId) return;
     setBusyId(user.id);
+    setActionError("");
     try {
       await setUserDisabled(user.id, !user.disabled);
       await refresh();
+    } catch {
+      setActionError("Couldn’t update that account. Try again.");
     } finally {
       setBusyId(null);
     }
@@ -138,7 +142,7 @@ function AdminUsers() {
   }, [items, query]);
 
   return (
-    <div className="flex min-h-full min-w-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-auto overscroll-contain">
       <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-3 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
         <label className="relative block min-w-0 flex-1">
           <Search
@@ -161,6 +165,11 @@ function AdminUsers() {
           <span className="inline-flex h-8 w-[7.5rem] shrink-0 items-center text-[12px] leading-none tabular-nums text-muted">
             {visible.length} {visible.length === 1 ? "row" : "rows"}
           </span>
+          {actionError ? (
+            <span className="max-w-[16rem] truncate text-[12px] text-red-600" title={actionError}>
+              {actionError}
+            </span>
+          ) : null}
           <button
             type="button"
             aria-label="Reload"
@@ -201,7 +210,7 @@ function AdminUsers() {
           </p>
         </div>
       ) : (
-        <div className="w-full min-w-0" role="table" aria-label="Users">
+        <div className="w-full min-w-[48rem]" role="table" aria-label="Users">
           <div
             className={`sticky top-[var(--toolbar-h)] z-[9] grid ${COLS} gap-x-4 border-b border-[var(--border)] bg-surface px-4`}
             role="row"
@@ -251,7 +260,7 @@ function AdminUsers() {
                       {user.created_at ? formatDate(user.created_at) : "—"}
                     </p>
                   </div>
-                  <div className={ROW_CELL} role="cell">
+                  <div className={`${ROW_CELL} justify-end`} role="cell">
                     <div className="flex w-full min-w-0 items-center justify-end">
                       {user.id === selfId ? (
                         <span className="inline-flex h-7 w-[4.75rem] items-center justify-center text-[12px] text-muted-soft">

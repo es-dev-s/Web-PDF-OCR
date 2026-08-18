@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
-import { MatchLine, matchFactsLabel } from "@/app/components/documents/duplicate-note";
+import { IncomingDuplicateNote, MatchLine, matchFactsLabel, mergeNotes } from "@/app/components/documents/duplicate-note";
 import { PreUploadCompare } from "@/app/components/documents/pre-upload-compare";
 import { inspectMatchUrl, type InspectMatch, type InspectResult } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
@@ -12,10 +12,9 @@ import { useDocumentsStore, type PendingSourceAdd } from "@/app/store/documents-
 import { useUserStore } from "@/app/store/user-store";
 
 function existingMatchNote(result: InspectResult, match: InspectMatch) {
-  const noted = result.matches.find((row) => row.note?.trim());
   return {
-    note: noted?.note ?? match.note,
-    who: noted?.member ?? match.member,
+    note: mergeNotes(match.note, ...result.matches.map((row) => row.note)),
+    who: match.member,
   };
 }
 
@@ -25,10 +24,16 @@ const FILE_PILL =
 function IncomingFile({
   file,
   result,
+  reason,
+  onReason,
+  required,
   onCompare,
 }: {
   file: File
   result: InspectResult
+  reason: string
+  onReason: (next: string) => void
+  required: boolean
   onCompare?: () => void
 }) {
   const match = result.matches[0];
@@ -48,6 +53,12 @@ function IncomingFile({
         <span className={`${FILE_PILL} ${uniqueMeta.className}`}>
           {uniqueMeta.label}
         </span>
+        <IncomingDuplicateNote
+          value={reason}
+          onChange={onReason}
+          required={required}
+          past={kept?.note}
+        />
       </span>
       {match ? (
         <div className="col-span-2 col-start-2 min-w-0">
@@ -59,7 +70,7 @@ function IncomingFile({
           />
         </div>
       ) : (
-        <p className="col-span-2 col-start-2 mt-1 truncate text-[11px] leading-4 text-muted">
+        <p className="col-span-2 col-start-2 mt-1 min-w-0 truncate text-[11px] leading-4 text-muted">
           Same file as another in this upload.
         </p>
       )}
@@ -80,8 +91,9 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
   const cancelPendingAdd = useDocumentsStore((s) => s.cancelPendingAdd);
   const role = useUserStore((s) => s.role);
   const member = role === "member";
-  const [note, setNote] = useState("");
+  const [notes, setNotes] = useState<string[]>(() => pending.files.map(() => ""));
   const [busy, setBusy] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [compareIndex, setCompareIndex] = useState(-1);
   const comparing =
     compareIndex >= 0 ? pending.files[compareIndex] ?? null : null;
@@ -107,10 +119,9 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        cancelPendingAdd();
-      }
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      cancelPendingAdd();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -118,6 +129,7 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
 
   if (typeof document === "undefined") return null;
 
+  const missingReason = member && notes.some((value) => value.trim().length === 0);
   const count = pending.files.length;
   const heading = count === 1 ? "This file is a duplicate" : "These files are duplicates";
 
@@ -167,6 +179,15 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
                   key={`${file.name}:${file.size}:${file.lastModified}:${index}`}
                   file={file}
                   result={pending.results[index] ?? { ok: true, uniqueness: "duplicate", matches: [] }}
+                  reason={notes[index] ?? ""}
+                  required={member}
+                  onReason={(next) =>
+                    setNotes((current) => {
+                      const copy = current.slice();
+                      copy[index] = next;
+                      return copy;
+                    })
+                  }
                   onCompare={
                     pending.results[index]?.matches[0]
                       ? () => setCompareIndex(index)
@@ -176,28 +197,14 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
               ))}
             </ul>
           </div>
-          {member ? (
-            <label className="mt-4 block min-w-0">
-              <span className="mb-1.5 block text-[12px] font-medium text-muted">
-                Reason for review
-              </span>
-              <textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value.slice(0, 500))}
-                rows={2}
-                maxLength={500}
-                required
-                placeholder="Why should this duplicate be kept?"
-                className="min-h-[4.5rem] w-full resize-none rounded-xl border border-[var(--border)] bg-canvas px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-muted-soft focus:border-[var(--border-strong)]"
-              />
-              <span className="mt-1.5 block text-[11px] leading-4 text-muted-soft">
-                An admin will see this with the pending files.
-              </span>
-            </label>
-          ) : null}
         </div>
         <div className="h-px bg-[var(--border)]" />
         <div className="flex h-14 shrink-0 items-center justify-end gap-2 px-5">
+          {submitError ? (
+            <p className="mr-auto min-w-0 truncate text-[12px] text-red-600" title={submitError}>
+              {submitError}
+            </p>
+          ) : null}
           <button
             ref={cancelRef}
             type="button"
@@ -208,14 +215,23 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
           </button>
           <button
             type="button"
-            disabled={busy || (member && note.trim().length === 0)}
+            disabled={busy || missingReason}
             onClick={() => {
               if (busy) return;
-              if (member && note.trim().length === 0) return;
+              if (missingReason) return;
               setBusy(true);
-              void confirmPendingAdd(member ? note.trim() : undefined).finally(() => {
-                setBusy(false);
-              });
+              setSubmitError("");
+              void confirmPendingAdd(notes.map((value) => value.trim()))
+                .then((result) => {
+                  if (result && !result.ok) {
+                    setSubmitError(
+                      result.message || "Couldn’t add those files. Try again.",
+                    );
+                  }
+                })
+                .finally(() => {
+                  setBusy(false);
+                });
             }}
             className="inline-flex h-8 min-w-[7.5rem] items-center justify-center rounded-xl bg-ink px-4 text-[13px] font-medium tracking-[-0.015em] text-white outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:bg-ink/30 disabled:hover:bg-ink/30"
           >

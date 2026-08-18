@@ -151,12 +151,15 @@ export function PreUploadCompare({
               detail={matchFacts}
               uniqueness={matchUniqueness}
               trailing={
-                <DuplicateNote
-                  note={matchNote}
-                  who={matchWho}
-                  compact
-                  emptyText="No saved reason for this existing match."
-                />
+                matchNote?.trim() ? (
+                  <DuplicateNote
+                    note={matchNote}
+                    who={matchWho}
+                    compact
+                    heading="Past notes"
+                    emptyText="No saved reason for this existing match."
+                  />
+                ) : null
               }
             />
             <div className="min-h-0 flex-1 bg-[var(--canvas)]">

@@ -16,7 +16,7 @@ type UserState = {
   email: string
   role: AuthRole | ""
   hydrate: () => Promise<void>
-  signIn: (email: string, password: string) => Promise<"ok" | "auth" | "error">
+  signIn: (email: string, password: string) => Promise<"ok" | "auth" | "disabled" | "rate" | "error">
   signOut: () => Promise<void>
   clear: () => void
 };
@@ -60,7 +60,9 @@ export const useUserStore = create<UserState>((set, get) => ({
       return "ok";
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-      if (code === "unauthorized" || code === "disabled") return "auth";
+      if (code === "unauthorized") return "auth";
+      if (code === "disabled") return "disabled";
+      if (code === "rate_limited") return "rate";
       return "error";
     }
   },
@@ -73,7 +75,7 @@ export const useUserStore = create<UserState>((set, get) => ({
     get().clear();
     const { useDocumentsStore } = await import("@/app/store/documents-store");
     const { useNotificationStore } = await import("@/app/store/notification-store");
-    useDocumentsStore.getState().replaceAll([]);
+    useDocumentsStore.getState().resetSession();
     useNotificationStore.getState().replaceAll([]);
   },
   clear: () => set({ ready: true, signedIn: false, ...EMPTY }),
@@ -83,6 +85,12 @@ export function onUnauthorized() {
   const state = useUserStore.getState();
   if (!state.signedIn) return;
   state.clear();
+  void import("@/app/store/documents-store").then(({ useDocumentsStore }) => {
+    useDocumentsStore.getState().resetSession();
+  });
+  void import("@/app/store/notification-store").then(({ useNotificationStore }) => {
+    useNotificationStore.getState().replaceAll([]);
+  });
 }
 
 export function isAdmin(role: string) {

@@ -12,6 +12,42 @@ export class ApiError extends Error {
   }
 }
 
+export function userFacingApiError(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case "too_large":
+        return "File is too large. Maximum is 50 MB.";
+      case "too_many":
+        return "You can attach at most 4 sources.";
+      case "invalid":
+        return "That file isn’t a supported PDF or image.";
+      case "no_files":
+        return "Add at least one file.";
+      case "busy":
+        return "Server is busy. Try again in a moment.";
+      case "erp_taken":
+        return "That ERP code is already in use.";
+      case "rate_limited":
+        return "Too many attempts. Try again in a few minutes.";
+      case "disabled":
+        return "This account is disabled.";
+      case "timeout":
+        return "That took too long. Try again.";
+      default:
+        break;
+    }
+    const message = error.message.trim();
+    if (
+      message &&
+      message !== "internal error" &&
+      !message.startsWith("request ")
+    ) {
+      return message;
+    }
+  }
+  return "Couldn’t complete that request. Try again.";
+}
+
 export type ApiDuplicate = {
   id: string
   source_id?: string
@@ -27,6 +63,7 @@ export type ApiDuplicate = {
   kind?: string
   uniqueness?: SourceUniqueness
   note?: string
+  note_log?: string
 };
 
 export type ApiSource = {
@@ -39,7 +76,10 @@ export type ApiSource = {
   size_bytes?: number
   file_url: string
   duplicates: ApiDuplicate[]
+  title_similar?: ApiDuplicate[]
   note?: string
+  note_log?: string
+  needs_title?: boolean
 };
 
 export type ApiDocument = {
@@ -58,6 +98,9 @@ export type ApiDocument = {
   sources: ApiSource[]
   review_note?: string
   review_requested_at?: string
+  title_pending?: boolean
+  title_similar?: ApiDuplicate[]
+  title_similar_count?: number
 };
 
 export type ApiNotification = {
@@ -119,7 +162,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers,
     });
-    if (response.status === 401 && path !== "/v1/auth/login" && path !== "/v1/auth/me") {
+    if (
+      response.status === 401 &&
+      path !== "/v1/auth/login" &&
+      path !== "/v1/auth/me" &&
+      !path.startsWith("/v1/public/")
+    ) {
       const { onUnauthorized } = await import("@/app/store/user-store");
       onUnauthorized();
     }
@@ -142,6 +190,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function listDocuments() {
   return request<{ items: ApiDocument[] }>("/v1/documents");
+}
+
+export function getPublicDocument(id: string) {
+  return request<ApiDocument>(`/v1/public/documents/${id}`);
+}
+
+export function publicDocumentPath(id: string) {
+  return `/d/${id}`;
+}
+
+export function publicDocumentURL(id: string) {
+  if (typeof window === "undefined") return publicDocumentPath(id);
+  return `${window.location.origin}${publicDocumentPath(id)}`;
 }
 
 export function nextErp() {
@@ -377,6 +438,10 @@ async function postFile<T>(
       credentials: "include",
       signal: combined,
     });
+    if (response.status === 401) {
+      const { onUnauthorized } = await import("@/app/store/user-store");
+      onUnauthorized();
+    }
     if (response.status === 503) {
       const error = await parseError(response);
       if (error.code === "busy" && attempt < 4 && !signal?.aborted) {

@@ -10,7 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { FileStage, PaneHead } from "@/app/components/documents/compare-view";
-import { DuplicateNote } from "@/app/components/documents/duplicate-note";
+import { DuplicateNote, historyNote } from "@/app/components/documents/duplicate-note";
 import { SAME_ORIGIN_BACKEND } from "@/app/lib/backend";
 import { useChromeStore } from "@/app/store/chrome-store";
 import {
@@ -251,7 +251,12 @@ export function CompareDocumentDialog() {
               uniqueness={source.uniqueness}
               trailing={
                 source.uniqueness === "duplicate" ? (
-                  <DuplicateNote note={source.note} who={item.member} compact />
+                  <DuplicateNote
+                    note={historyNote(source.note, source.noteLog)}
+                    who={item.member}
+                    compact
+                    heading="This file"
+                  />
                 ) : undefined
               }
             />
@@ -278,11 +283,12 @@ export function CompareDocumentDialog() {
                   uniqueness={match.uniqueness}
                   trailing={
                     <span className="flex shrink-0 items-center gap-1">
-                      {match.uniqueness === "duplicate" ? (
+                      {match.note?.trim() ? (
                         <DuplicateNote
                           note={match.note}
                           who={match.member}
                           compact
+                          heading="Existing file"
                         />
                       ) : null}
                       {duplicates.length > 0 ? (

@@ -117,12 +117,25 @@ function DocumentAdd() {
 }
 
 export function DocumentsToolbar() {
+  const actionError = useDocumentsStore((s) => s.actionError);
+  const clearActionError = useDocumentsStore((s) => s.clearActionError);
+
   return (
     <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
       <DocumentSearch />
       <DateFilterButton />
       <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
         <DocumentRowCount />
+        {actionError ? (
+          <button
+            type="button"
+            onClick={clearActionError}
+            className="max-w-[16rem] truncate text-left text-[12px] text-red-600 outline-none hover:underline"
+            title={actionError}
+          >
+            {actionError}
+          </button>
+        ) : null}
         <DocumentReload />
         <DocumentAdd />
       </div>

@@ -6,12 +6,17 @@ import { FileText, Plus, Upload, X } from "lucide-react";
 import { AnzscoSelect } from "@/app/components/documents/anzsco-select";
 import { TeamSelect } from "@/app/components/documents/team-select";
 import { DocTitle } from "@/app/components/documents/doc-title";
-import { MatchLine, matchFactsLabel } from "@/app/components/documents/duplicate-note";
+import { IncomingDuplicateNote, MatchLine, matchFactsLabel, mergeNotes } from "@/app/components/documents/duplicate-note";
 import { PreUploadCompare } from "@/app/components/documents/pre-upload-compare";
-import { inspectFile, inspectMatchUrl, suggestTitle } from "@/app/lib/api";
+import { ApiError, inspectFile, inspectMatchUrl, suggestTitle } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
 import { SOURCE_TOTAL, uniquenessMeta, type SourceUniqueness } from "@/app/lib/files";
-import { documentName, storedTitle } from "@/app/lib/titles";
+import {
+  documentName,
+  isPrintedTitle,
+  storedTitle,
+  UNREADABLE_TITLE,
+} from "@/app/lib/titles";
 import { findTeam } from "@/app/lib/teams";
 import { useChromeStore } from "@/app/store/chrome-store";
 import {
@@ -40,7 +45,7 @@ function isAllowed(file: File) {
   return file.type.startsWith("image/");
 }
 
-const TITLE_CONCURRENCY = 2;
+const TITLE_CONCURRENCY = SOURCE_TOTAL;
 
 function fileKey(file: File) {
   return `${file.name}:${file.size}:${file.lastModified}`;
@@ -56,7 +61,25 @@ function isAbortError(error: unknown) {
     : error instanceof Error && error.name === "AbortError";
 }
 
+function titleReady(value: string) {
+  return isPrintedTitle(value) || value === UNREADABLE_TITLE;
+}
+
+function shouldRetryTitle(error: unknown) {
+  if (isAbortError(error)) return false;
+  if (!(error instanceof ApiError)) return true;
+  return (
+    error.code === "busy" ||
+    error.code === "timeout" ||
+    error.status === 503 ||
+    error.status === 504 ||
+    error.status === 499
+  );
+}
+
 type TitleEntry = { pending: boolean; value: string };
+
+const settledTitles = new Map<string, string>();
 
 function useSourceTitles(files: File[]) {
   const [titles, setTitles] = useState<Record<string, TitleEntry>>({});
@@ -64,6 +87,7 @@ function useSourceTitles(files: File[]) {
   const queue = useRef<File[]>([]);
   const active = useRef(0);
   const started = useRef(new Set<string>());
+  const tries = useRef(new Map<string, number>());
 
   // Named so it can re-enter itself as each request settles; every value it
   // touches is a ref or a stable setter, so it never needs rebuilding.
@@ -74,26 +98,54 @@ function useSourceTitles(files: File[]) {
       const ac = new AbortController();
       abortByKey.current.set(key, ac);
       active.current += 1;
+      let retrying = false;
+      const finish = () => {
+        if (abortByKey.current.get(key) === ac) abortByKey.current.delete(key);
+        active.current = Math.max(0, active.current - 1);
+        drain();
+      };
+      const retry = () => {
+        retrying = true;
+        const n = (tries.current.get(key) || 0) + 1;
+        tries.current.set(key, n);
+        setTitles((prev) =>
+          prev[key] ? { ...prev, [key]: { pending: true, value: "" } } : prev,
+        );
+        const wait = n <= 2 ? 400 : Math.min(1000 * (n - 2), 5000);
+        window.setTimeout(() => {
+          if (ac.signal.aborted || !started.current.has(key)) {
+            finish();
+            return;
+          }
+          queue.current.push(file);
+          finish();
+        }, wait);
+      };
       void suggestTitle(file, ac.signal)
         .then((data) => {
           if (ac.signal.aborted) return;
           const value = documentName(data);
-          setTitles((prev) =>
-            prev[key] ? { ...prev, [key]: { pending: false, value } } : prev,
-          );
+          if (titleReady(value)) {
+            settledTitles.set(key, value);
+            setTitles((prev) =>
+              prev[key] ? { ...prev, [key]: { pending: false, value } } : prev,
+            );
+            return;
+          }
+          retry();
         })
         .catch((error) => {
           if (ac.signal.aborted || isAbortError(error)) return;
+          if (shouldRetryTitle(error)) {
+            retry();
+            return;
+          }
           setTitles((prev) =>
-            prev[key]
-              ? { ...prev, [key]: { pending: false, value: "Untitled document" } }
-              : prev,
+            prev[key] ? { ...prev, [key]: { pending: true, value: "" } } : prev,
           );
         })
         .finally(() => {
-          abortByKey.current.delete(key);
-          active.current = Math.max(0, active.current - 1);
-          drain();
+          if (!retrying) finish();
         });
     }
   }, []);
@@ -102,6 +154,7 @@ function useSourceTitles(files: File[]) {
     queue.current = [];
     active.current = 0;
     started.current.clear();
+    tries.current.clear();
     for (const ac of abortByKey.current.values()) ac.abort();
     abortByKey.current.clear();
   }, []);
@@ -115,6 +168,7 @@ function useSourceTitles(files: File[]) {
     for (const key of [...started.current]) {
       if (live.has(key)) continue;
       started.current.delete(key);
+      tries.current.delete(key);
       abortByKey.current.get(key)?.abort();
       abortByKey.current.delete(key);
     }
@@ -124,6 +178,15 @@ function useSourceTitles(files: File[]) {
       const next: Record<string, TitleEntry> = {};
       for (const file of files) {
         const key = fileKey(file);
+        if (prev[key]?.value && titleReady(prev[key].value)) {
+          next[key] = prev[key];
+          continue;
+        }
+        const cached = settledTitles.get(key);
+        if (cached) {
+          next[key] = { pending: false, value: cached };
+          continue;
+        }
         if (prev[key]) {
           next[key] = prev[key];
           continue;
@@ -138,6 +201,10 @@ function useSourceTitles(files: File[]) {
     for (const file of files) {
       const key = fileKey(file);
       if (started.current.has(key)) continue;
+      if (settledTitles.has(key)) {
+        started.current.add(key);
+        continue;
+      }
       started.current.add(key);
       if (isPdfFile(file)) queue.current.push(file);
     }
@@ -178,69 +245,51 @@ function storedPreviewUrl(
   return "";
 }
 
-function notedInspectMatch(
-  matches: Array<{ note?: string; member?: string }> | undefined,
-) {
-  if (!matches?.length) return undefined;
-  return matches.find((row) => row.note?.trim()) ?? matches[0];
-}
-
 function storedMatchNote(
   check: InspectEntry | undefined,
   items: Array<{
+    id: string
     member: string
+    reviewNote?: string
     sources: Array<{
       id: string
       uniqueness: SourceUniqueness
       note?: string
+      noteLog?: string
       duplicates: Array<{
         id: string
         uniqueness: SourceUniqueness
         note?: string
+        noteLog?: string
         member?: string
       }>
     }>
   }>,
 ) {
-  if (check?.matchNote?.trim()) {
-    return { note: check.matchNote, who: check.matchNoteWho || check.member };
-  }
+  const chunks: string[] = [];
+  let who = check?.matchNoteWho || check?.member;
+  const add = (note?: string, nextWho?: string) => {
+    if (!note?.trim()) return;
+    chunks.push(note);
+    if (nextWho?.trim()) who = nextWho;
+  };
+  add(check?.matchNote);
   const matchId = check?.matchId;
-  if (!matchId) {
-    return { note: check?.matchNote, who: check?.matchNoteWho || check?.member };
-  }
-
-  let linked: { note?: string; who?: string } | undefined;
-  for (const item of items) {
-    for (const source of item.sources) {
-      if (source.id === matchId) {
-        if (source.note?.trim()) {
-          return { note: source.note, who: item.member };
-        }
-        const fromDup = source.duplicates.find((row) => row.note?.trim());
-        if (fromDup) {
-          return { note: fromDup.note, who: fromDup.member || item.member };
-        }
-      }
-      const asDup = source.duplicates.find((row) => row.id === matchId);
-      if (asDup?.note?.trim()) {
-        return { note: asDup.note, who: asDup.member || item.member };
-      }
-      if (
-        source.uniqueness === "duplicate" &&
-        source.note?.trim() &&
-        source.duplicates.some((row) => row.id === matchId)
-      ) {
-        linked = { note: source.note, who: item.member };
+  const matchDoc = check?.matchDocumentId;
+  if (matchId || matchDoc) {
+    for (const item of items) {
+      const docHit = Boolean(matchDoc && item.id === matchDoc);
+      for (const source of item.sources) {
+        const sourceHit = source.id === matchId;
+        const linked = source.duplicates.some((row) => row.id === matchId);
+        if (!sourceHit && !linked && !docHit) continue;
+        if (sourceHit || linked) add(item.reviewNote, item.member);
+        add(source.noteLog || source.note, item.member);
+        for (const row of source.duplicates) add(row.noteLog || row.note, row.member);
       }
     }
   }
-  return (
-    linked ?? {
-      note: check.matchNote,
-      who: check.matchNoteWho || check.member,
-    }
-  );
+  return { note: mergeNotes(...chunks) || undefined, who };
 }
 
 function storedMatchContext(
@@ -368,7 +417,6 @@ function useSourceInspect(files: File[]) {
         .then((data) => {
           if (ac.signal.aborted) return;
           const match = data.matches[0];
-          const noted = notedInspectMatch(data.matches);
           const server =
             data.ok && data.uniqueness === "duplicate" ? "duplicate" : "unique";
           setInspect((prev) =>
@@ -390,8 +438,8 @@ function useSourceInspect(files: File[]) {
                 matchId: match?.id,
                 matchDocumentId: match?.document_id,
                 matchUniqueness: match?.uniqueness,
-                matchNote: noted?.note,
-                matchNoteWho: noted?.member,
+                matchNote: mergeNotes(...(data.matches ?? []).map((row) => row.note)),
+                matchNoteWho: match?.member,
                 uploaded: match?.uploaded_at,
               },
             }),
@@ -562,7 +610,8 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
   const [over, setOver] = useState(false);
   const [erpError, setErpError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [note, setNote] = useState("");
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState("");
   const [compareKey, setCompareKey] = useState("");
   const titles = useSourceTitles(files);
   const inspect = useSourceInspect(files);
@@ -592,7 +641,8 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      onClose();
     };
     const onDragOver = (event: DragEvent) => {
       if (hasFiles(event)) event.preventDefault();
@@ -608,6 +658,21 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
   const addIncoming = (list: File[]) => {
     if (list.length === 0) return;
     setFiles((current) => mergeFiles(current, list));
+  };
+
+  const removeFile = (index: number) => {
+    setFiles((current) => {
+      const next = current.filter((_, i) => i !== index);
+      const live = new Set(next.map(fileKey));
+      setNotes((prev) => {
+        const kept: Record<string, string> = {};
+        for (const [key, value] of Object.entries(prev)) {
+          if (live.has(key)) kept[key] = value;
+        }
+        return kept;
+      });
+      return next;
+    });
   };
 
   const onDragEnter = (event: React.DragEvent) => {
@@ -640,6 +705,7 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
   };
 
   const inspecting = files.some((file) => inspect[fileKey(file)]?.pending !== false);
+  const inspectFailed = files.some((file) => inspect[fileKey(file)]?.failed === true);
   const hasDuplicate = files.some((file) => {
     const check = inspect[fileKey(file)];
     return Boolean(
@@ -649,17 +715,37 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
   // Members must justify a duplicate before an admin will review it. Admins can
   // record the same reason, but nothing blocks them.
   const needsReason = !admin && hasDuplicate;
+  const missingReason = files.some((file) => {
+    const check = inspect[fileKey(file)];
+    if (!check || check.pending || check.failed || check.uniqueness !== "duplicate") {
+      return false;
+    }
+    return (notes[fileKey(file)] ?? "").trim().length === 0;
+  });
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (busy.current || submitting) return;
-    if (needsReason && note.trim().length === 0) return;
+    if (files.length === 0) {
+      setSubmitError("Add at least one document.");
+      return;
+    }
+    if (!client.trim() || !erp.trim()) {
+      setSubmitError("Client name and ERP code are required.");
+      return;
+    }
+    if (inspecting || inspectFailed) return;
+    if (needsReason && missingReason) {
+      setSubmitError("Add a reason on each duplicate file.");
+      return;
+    }
     if (erpTaken(erp)) {
       setErpError(true);
       return;
     }
     busy.current = true;
     setSubmitting(true);
+    setSubmitError("");
     const result = await addDocument({
       client,
       erp,
@@ -672,17 +758,20 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
         if (!entry || entry.pending) return "";
         return storedTitle(entry.value);
       }),
-      note: hasDuplicate ? note.trim() || undefined : undefined,
+      notes: files.map((file) => notes[fileKey(file)]?.trim() ?? ""),
     });
-    if (result === "erp") {
+    if (!result.ok && result.reason === "erp") {
       busy.current = false;
       setSubmitting(false);
       setErpError(true);
       return;
     }
-    if (result !== "ok") {
+    if (!result.ok) {
       busy.current = false;
       setSubmitting(false);
+      setSubmitError(
+        result.message || "Couldn’t add this document. Try again.",
+      );
       return;
     }
     onClose();
@@ -695,7 +784,8 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
     !erpError &&
     !submitting &&
     !inspecting &&
-    (!needsReason || note.trim().length > 0);
+    !inspectFailed &&
+    (!needsReason || !missingReason);
 
   return createPortal(
     <div
@@ -776,6 +866,7 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
             <div className="mb-1.5 flex h-5 items-center justify-between">
               <p className="text-[12px] font-medium text-muted">Upload</p>
               <p className="text-[11px] tabular-nums text-muted-soft">
+                {files.length === 0 ? "Required · " : ""}
                 {files.length} / {SOURCE_TOTAL}
               </p>
             </div>
@@ -878,15 +969,21 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
                                 {uniqueMeta.label}
                               </span>
                             )}
+                            {duplicate ? (
+                              <IncomingDuplicateNote
+                                value={notes[key] ?? ""}
+                                onChange={(next) =>
+                                  setNotes((prev) => ({ ...prev, [key]: next }))
+                                }
+                                required={needsReason}
+                                past={matchKept.note}
+                              />
+                            ) : null}
                           </div>
                           <button
                             type="button"
                             aria-label={`Remove ${file.name}`}
-                            onClick={() =>
-                              setFiles((current) =>
-                                current.filter((_, i) => i !== index),
-                              )
-                            }
+                            onClick={() => removeFile(index)}
                             className="flex size-7 shrink-0 items-center justify-center justify-self-end rounded-lg text-muted outline-none transition-[background-color,color] duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black/[0.06] hover:text-ink focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
                           >
                             <X className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
@@ -922,34 +1019,16 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
                 </div>
               )}
             </div>
+            {hasDuplicate ? (
+              <p className="mt-1.5 text-[11px] leading-4 text-muted-soft">
+                The pen is this upload. Past notes under Matches are already on that file.
+              </p>
+            ) : files.length === 0 ? (
+              <p className="mt-1.5 text-[11px] leading-4 text-muted-soft">
+                Add at least one PDF or image to save.
+              </p>
+            ) : null}
           </div>
-
-          {hasDuplicate ? (
-            <label className="mt-4 block min-w-0">
-              <span className="mb-1.5 flex h-5 items-center justify-between">
-                <span className="text-[12px] font-medium text-muted">
-                  {needsReason ? "Reason for review" : "Reason for the duplicate"}
-                </span>
-                <span className="text-[11px] tabular-nums text-muted-soft">
-                  {needsReason ? "Required" : "Optional"}
-                </span>
-              </span>
-              <textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value.slice(0, 500))}
-                rows={3}
-                maxLength={500}
-                required={needsReason}
-                placeholder="Why should this duplicate be kept?"
-                className="min-h-[4.5rem] w-full resize-none rounded-xl border border-[var(--border)] bg-canvas px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-muted-soft focus:border-[var(--border-strong)]"
-              />
-              <span className="mt-1.5 block text-[11px] leading-4 text-muted-soft">
-                {needsReason
-                  ? "An admin will see this with the pending files."
-                  : "Saved on the duplicate so anyone reviewing it knows why it was kept."}
-              </span>
-            </label>
-          ) : null}
         </div>
 
         {over ? (
@@ -969,6 +1048,11 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
 
         <div className="h-px bg-[var(--border)]" />
         <div className="flex h-14 shrink-0 items-center justify-end gap-2 px-5">
+          {submitError ? (
+            <p className="mr-auto min-w-0 truncate text-[12px] text-red-600" title={submitError}>
+              {submitError}
+            </p>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
