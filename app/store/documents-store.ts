@@ -10,13 +10,14 @@ import {
   userFacingApiError,
   type ApiDocument,
   type ApiSource,
+  type AuthRole,
   type InspectResult,
 } from "@/app/lib/api";
 import { anzscoMatches, foldSearch } from "@/app/lib/anzsco";
+import { findTeam } from "@/app/lib/teams";
 import { formatDate, formatDateTime, toDayKey } from "@/app/lib/dates";
 import { SOURCE_TOTAL, parseDocumentStatus, parseUniqueness, type DocumentStatus, type SourceUniqueness } from "@/app/lib/files";
 import {
-  alignedTitleWords,
   displayTitle,
   isPrintedTitle,
   isTitlePending,
@@ -78,6 +79,7 @@ export type DocumentItem = {
   id: string
   title: string
   uploader: string
+  ownerId?: string
   client: string
   erp: string
   anzsco: string
@@ -115,16 +117,28 @@ export type PendingSourceAdd = {
   docId: string
   files: File[]
   results: InspectResult[]
+  uniqueFiles?: File[]
 };
 
 export type WriteResult =
   | { ok: true }
   | { ok: false; reason: "erp" | "files" | "error"; message?: string };
 
+export type PeopleKind = "all" | "member" | "admin";
+
+export type UserDirectoryEntry = {
+  id: string
+  name: string
+  role: AuthRole
+};
+
 type DocumentsState = {
   query: string
   dateFrom: string | null
   dateTo: string | null
+  userKind: PeopleKind
+  teamFilter: string
+  userDirectory: UserDirectoryEntry[]
   items: DocumentItem[]
   visibleItems: DocumentItem[]
   expandedId: string | null
@@ -138,6 +152,8 @@ type DocumentsState = {
   actionError: string
   setQuery: (query: string) => void
   setDateRange: (from: string | null, to: string | null) => void
+  setPeopleFilter: (userKind: PeopleKind, team: string) => void
+  setUserDirectory: (users: UserDirectoryEntry[]) => void
   toggleExpanded: (id: string) => void
   toggleInspect: (docId: string, sourceId: string) => void
   openCompare: (docId: string, sourceId: string) => void
@@ -201,16 +217,56 @@ function matchesDate(item: DocumentItem, from: string | null, to: string | null)
   return true;
 }
 
+function matchesTeam(item: DocumentItem, team: string) {
+  const want = team.trim();
+  if (!want) return true;
+  const got = findTeam(item.team) ?? item.team.trim();
+  return foldSearch(got) === foldSearch(want);
+}
+
+function directoryRole(
+  item: DocumentItem,
+  directory: UserDirectoryEntry[],
+): AuthRole {
+  if (item.ownerId) {
+    const byId = directory.find((user) => user.id === item.ownerId);
+    if (byId) return byId.role;
+  }
+  const who = foldSearch(item.member || item.uploader);
+  if (!who) return "member";
+  const byName = directory.find((user) => foldSearch(user.name) === who);
+  if (byName) return byName.role;
+  const self = useUserStore.getState();
+  if (self.signedIn && foldSearch(self.name) === who && (self.role === "admin" || self.role === "member")) {
+    return self.role;
+  }
+  return "member";
+}
+
+function matchesPeople(
+  item: DocumentItem,
+  kind: PeopleKind,
+  directory: UserDirectoryEntry[],
+) {
+  if (kind === "all") return true;
+  return directoryRole(item, directory) === kind;
+}
+
 function filterItems(
   items: DocumentItem[],
   query: string,
   from: string | null,
   to: string | null,
+  userKind: PeopleKind,
+  team: string,
+  directory: UserDirectoryEntry[],
 ): DocumentItem[] {
   const q = foldSearch(query);
   return items.filter((item) => {
     if (q && !matchesQuery(item, q)) return false;
-    return matchesDate(item, from, to);
+    if (!matchesDate(item, from, to)) return false;
+    if (!matchesTeam(item, team)) return false;
+    return matchesPeople(item, userKind, directory);
   });
 }
 
@@ -219,8 +275,36 @@ function visibleOf(state: {
   query: string
   dateFrom: string | null
   dateTo: string | null
+  userKind: PeopleKind
+  teamFilter: string
+  userDirectory: UserDirectoryEntry[]
 }) {
-  return filterItems(state.items, state.query, state.dateFrom, state.dateTo);
+  return filterItems(
+    state.items,
+    state.query,
+    state.dateFrom,
+    state.dateTo,
+    state.userKind,
+    state.teamFilter,
+    state.userDirectory,
+  );
+}
+
+export function listedDocuments(items: DocumentItem[], role: string) {
+  return role === "admin"
+    ? items.filter((item) => item.status !== "pending_review")
+    : items;
+}
+
+export function listedFileCount(items: DocumentItem[], role: string) {
+  return listedDocuments(items, role).reduce(
+    (sum, item) => sum + item.sources.length,
+    0,
+  );
+}
+
+export function peopleFilterActive(userKind: PeopleKind, team: string) {
+  return userKind !== "all" || Boolean(team.trim());
 }
 
 function pruneInspectForItem(
@@ -313,19 +397,20 @@ function mapSimilar(match: {
   };
 }
 
-function uniqueSimilar(matches: TitleSimilarMatch[]): TitleSimilarMatch[] {
+function uniqueSimilar(
+  matches: TitleSimilarMatch[],
+  selfDocumentId?: string,
+): TitleSimilarMatch[] {
   const best = new Map<string, TitleSimilarMatch>();
   for (const match of matches) {
-    const key = match.documentId || match.id;
+    const sameDoc = Boolean(selfDocumentId && match.documentId === selfDocumentId);
+    const key = sameDoc
+      ? `s:${match.sourceId || match.id}`
+      : `d:${match.documentId || match.id}`;
     const prev = best.get(key);
     if (!prev || match.score > prev.score) best.set(key, match);
   }
   return [...best.values()].sort((a, b) => b.score - a.score);
-}
-
-function wordSimilar(original: string, similar: string): boolean {
-  const { matched, total } = alignedTitleWords(original, similar);
-  return total > 0 && matched / total >= 0.9;
 }
 
 function titleRank(title: string): number {
@@ -400,7 +485,10 @@ function preferItem(prev: DocumentItem, next: DocumentItem): DocumentItem {
     status,
     sources,
     titlePending: isTitlePending(title),
-    titleSimilar: uniqueSimilar(sources.flatMap((source) => source.titleSimilar)),
+    titleSimilar: uniqueSimilar(
+      sources.flatMap((source) => source.titleSimilar),
+      next.id,
+    ),
   };
 }
 
@@ -434,9 +522,7 @@ function mapSource(source: ApiSource): SourceFile {
       note: match.note?.trim() || undefined,
       noteLog: match.note_log?.trim() || undefined,
     })),
-    titleSimilar: (source.title_similar ?? [])
-      .map(mapSimilar)
-      .filter((match) => wordSimilar(title, match.title)),
+    titleSimilar: (source.title_similar ?? []).map(mapSimilar),
   };
 }
 
@@ -444,11 +530,13 @@ export function mapDocument(raw: ApiDocument): DocumentItem {
   const sources = (raw.sources ?? []).map(mapSource);
   const titleSimilar = uniqueSimilar(
     sources.flatMap((source) => source.titleSimilar),
+    raw.id,
   );
   return {
     id: raw.id,
     title: displayTitle(raw.title),
     uploader: raw.uploader || raw.member,
+    ownerId: raw.owner_id,
     client: raw.client,
     erp: raw.erp,
     anzsco: raw.anzsco,
@@ -480,6 +568,9 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   query: "",
   dateFrom: null,
   dateTo: null,
+  userKind: "all",
+  teamFilter: "",
+  userDirectory: [],
   items: EMPTY,
   visibleItems: EMPTY,
   expandedId: null,
@@ -506,6 +597,37 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       dateFrom: from,
       dateTo: to,
       visibleItems: visibleOf({ ...state, dateFrom: from, dateTo: to }),
+    }));
+  },
+  setPeopleFilter: (userKind, team) => {
+    const nextTeam = team.trim();
+    if (get().userKind === userKind && get().teamFilter === nextTeam) return;
+    set((state) => ({
+      userKind,
+      teamFilter: nextTeam,
+      visibleItems: visibleOf({ ...state, userKind, teamFilter: nextTeam }),
+    }));
+  },
+  setUserDirectory: (users) => {
+    const next = users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      role: user.role,
+    }));
+    const prev = get().userDirectory;
+    if (
+      prev.length === next.length &&
+      prev.every((user, index) =>
+        user.id === next[index]?.id &&
+        user.name === next[index]?.name &&
+        user.role === next[index]?.role,
+      )
+    ) {
+      return;
+    }
+    set((state) => ({
+      userDirectory: next,
+      visibleItems: visibleOf({ ...state, userDirectory: next }),
     }));
   },
   toggleExpanded: (id) => {
@@ -761,6 +883,18 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
         }
         unique.push(slice[i]);
       }
+      if (dupFiles.length > 0) {
+        if (!get().items.find((item) => item.id === id)) return;
+        set({
+          pendingSourceAdd: {
+            docId: id,
+            files: dupFiles,
+            results: dupResults,
+            uniqueFiles: unique,
+          },
+        });
+        return;
+      }
       if (unique.length > 0) {
         const written = await get().addSources(id, unique);
         if (!written.ok) {
@@ -769,11 +903,6 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
               written.message || "Couldn’t add those files. Try again.",
           });
         }
-      }
-      if (dupFiles.length > 0 && get().items.find((item) => item.id === id)) {
-        set({
-          pendingSourceAdd: { docId: id, files: dupFiles, results: dupResults },
-        });
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -792,13 +921,27 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     if (!pending || get().addingToId) {
       return { ok: false, reason: "error", message: "Nothing to add." };
     }
+    const reasons = pending.files.map((_, index) => notes?.[index]?.trim() ?? "");
+    if (reasons.some((value) => value.length === 0)) {
+      return {
+        ok: false,
+        reason: "error",
+        message:
+          pending.files.length === 1
+            ? "Add a note on the duplicate file."
+            : "Add a note on each duplicate file.",
+      };
+    }
     set({ addingToId: pending.docId, actionError: "" });
     try {
       if (!get().items.find((item) => item.id === pending.docId)) {
         set({ pendingSourceAdd: null });
         return { ok: false, reason: "error", message: "Document is gone." };
       }
-      const result = await get().addSources(pending.docId, pending.files, notes);
+      const uniqueFiles = pending.uniqueFiles ?? [];
+      const files = [...uniqueFiles, ...pending.files];
+      const allNotes = [...uniqueFiles.map(() => ""), ...reasons];
+      const result = await get().addSources(pending.docId, files, allNotes);
       if (result.ok) set({ pendingSourceAdd: null });
       return result;
     } finally {
@@ -827,6 +970,9 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
       pendingSourceAdd: null,
       addingToId: null,
       actionError: "",
+      userKind: "all",
+      teamFilter: "",
+      userDirectory: [],
     });
   },
   openView: (id) => {

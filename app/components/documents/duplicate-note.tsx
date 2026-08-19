@@ -325,6 +325,39 @@ export function DuplicateNote({
   );
 }
 
+/** Visible reason field on a duplicate in the upload list. One file, one note. */
+export function IncomingDuplicateField({
+  value,
+  onChange,
+  missing = false,
+}: {
+  value: string
+  onChange: (next: string) => void
+  missing?: boolean
+}) {
+  return (
+    <label className="mt-1.5 block min-w-0">
+      <span className="mb-1 block text-[10px] font-medium tracking-[0.04em] text-muted-soft uppercase">
+        Note for this duplicate
+      </span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value.slice(0, 500))}
+        rows={2}
+        maxLength={500}
+        required
+        aria-invalid={missing || undefined}
+        placeholder="Why should this file be kept?"
+        className={`min-h-[3.25rem] w-full resize-none rounded-xl border bg-canvas px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-muted-soft ${
+          missing
+            ? "border-orange-300 focus:border-orange-400"
+            : "border-[var(--border)] focus:border-[var(--border-strong)]"
+        }`}
+      />
+    </label>
+  );
+}
+
 export function IncomingDuplicateNote({
   value,
   onChange,

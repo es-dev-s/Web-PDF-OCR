@@ -57,8 +57,8 @@ function SimilarRow({
   original: string
   match: TitleSimilarMatch
 }) {
-  const pct = similarPercent(match.score);
   const words = alignedTitleWords(original, match.title);
+  const pct = similarPercent(words.score);
   const detail = metaLine(match);
   return (
     <li className="flex items-start gap-3 border-t border-[var(--border)] px-5 py-3">
@@ -71,8 +71,8 @@ function SimilarRow({
           <p className="mt-0.5 truncate text-[12px] text-muted">{detail}</p>
         ) : null}
         <p className="mt-0.5 text-[11px] tabular-nums text-muted-soft">
-          {words.total > 0
-            ? `${words.matched} of ${words.total} words match · ${match.uploaded}`
+          {words.matched > 0
+            ? `${words.matched} matching content word${words.matched === 1 ? "" : "s"} · ${match.uploaded}`
             : match.uploaded}
         </p>
       </div>
@@ -221,7 +221,7 @@ export function SimilarTitleDialog() {
               {heading}
             </h2>
             <p className="text-[11px] text-muted">
-              90% of words match the original printed title
+              Shared printed-title words · 70% or closer
             </p>
           </div>
           <button

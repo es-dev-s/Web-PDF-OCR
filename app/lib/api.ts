@@ -86,6 +86,7 @@ export type ApiDocument = {
   id: string
   title: string
   uploader: string
+  owner_id?: string
   client: string
   erp: string
   anzsco: string

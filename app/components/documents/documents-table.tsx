@@ -4,7 +4,7 @@ import { useCallback, useMemo } from "react";
 import { DocumentsTableHeader, DocumentRow } from "@/app/components/documents/document-row";
 import { SOURCE_TOTAL } from "@/app/lib/files";
 import { useVirtualWindow } from "@/app/hooks/use-virtual-window";
-import { useDocumentsStore, type DocumentItem } from "@/app/store/documents-store";
+import { useDocumentsStore, peopleFilterActive, type DocumentItem } from "@/app/store/documents-store";
 import { useUserStore } from "@/app/store/user-store";
 
 type TableRow =
@@ -32,11 +32,17 @@ function DocumentsTableBody({
   const query = useDocumentsStore((s) => s.query);
   const dateFrom = useDocumentsStore((s) => s.dateFrom);
   const dateTo = useDocumentsStore((s) => s.dateTo);
+  const userKind = useDocumentsStore((s) => s.userKind);
+  const teamFilter = useDocumentsStore((s) => s.teamFilter);
+  const filtered =
+    Boolean(query.trim()) ||
+    Boolean(dateFrom || dateTo) ||
+    peopleFilterActive(userKind, teamFilter);
 
   if (rows.length === 0) {
     return (
       <p className="px-4 py-10 text-center text-[13px] text-muted">
-        {query.trim() || dateFrom || dateTo
+        {filtered
           ? "No documents match this filter."
           : "No documents yet."}
       </p>

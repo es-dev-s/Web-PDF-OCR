@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FileText, X } from "lucide-react";
-import { IncomingDuplicateNote, MatchLine, matchFactsLabel, mergeNotes } from "@/app/components/documents/duplicate-note";
+import { IncomingDuplicateField, MatchLine, matchFactsLabel, mergeNotes } from "@/app/components/documents/duplicate-note";
 import { PreUploadCompare } from "@/app/components/documents/pre-upload-compare";
 import { inspectMatchUrl, type InspectMatch, type InspectResult } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
@@ -26,14 +26,14 @@ function IncomingFile({
   result,
   reason,
   onReason,
-  required,
+  missing,
   onCompare,
 }: {
   file: File
   result: InspectResult
   reason: string
   onReason: (next: string) => void
-  required: boolean
+  missing: boolean
   onCompare?: () => void
 }) {
   const match = result.matches[0];
@@ -53,12 +53,6 @@ function IncomingFile({
         <span className={`${FILE_PILL} ${uniqueMeta.className}`}>
           {uniqueMeta.label}
         </span>
-        <IncomingDuplicateNote
-          value={reason}
-          onChange={onReason}
-          required={required}
-          past={kept?.note}
-        />
       </span>
       {match ? (
         <div className="col-span-2 col-start-2 min-w-0">
@@ -68,11 +62,23 @@ function IncomingFile({
             who={kept?.who}
             onCompare={onCompare}
           />
+          <IncomingDuplicateField
+            value={reason}
+            onChange={onReason}
+            missing={missing}
+          />
         </div>
       ) : (
-        <p className="col-span-2 col-start-2 mt-1 min-w-0 truncate text-[11px] leading-4 text-muted">
-          Same file as another in this upload.
-        </p>
+        <div className="col-span-2 col-start-2 min-w-0">
+          <p className="mt-1 min-w-0 truncate text-[11px] leading-4 text-muted">
+            Same file as another in this upload.
+          </p>
+          <IncomingDuplicateField
+            value={reason}
+            onChange={onReason}
+            missing={missing}
+          />
+        </div>
       )}
     </li>
   );
@@ -129,7 +135,8 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
 
   if (typeof document === "undefined") return null;
 
-  const missingReason = member && notes.some((value) => value.trim().length === 0);
+  const missingNotes = notes.filter((value) => value.trim().length === 0).length;
+  const missingReason = missingNotes > 0;
   const count = pending.files.length;
   const heading = count === 1 ? "This file is a duplicate" : "These files are duplicates";
 
@@ -169,8 +176,8 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
         <div className="shell-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
           <p className="text-[13px] leading-5 text-muted">
             {member
-              ? "It matches an existing source. Request admin review to keep it. Until then it stays pending and only you and admins can see it."
-              : "It matches an existing source. You can still add it — it will be saved as a duplicate."}
+              ? "Each duplicate needs a note before you can request review. Until then it stays pending and only you and admins can see it."
+              : "Each duplicate needs a note before it can be saved."}
           </p>
           <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--border)] bg-canvas">
             <ul>
@@ -180,14 +187,15 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
                   file={file}
                   result={pending.results[index] ?? { ok: true, uniqueness: "duplicate", matches: [] }}
                   reason={notes[index] ?? ""}
-                  required={member}
-                  onReason={(next) =>
+                  missing={(notes[index] ?? "").trim().length === 0}
+                  onReason={(next) => {
                     setNotes((current) => {
                       const copy = current.slice();
                       copy[index] = next;
                       return copy;
-                    })
-                  }
+                    });
+                    if (submitError) setSubmitError("");
+                  }}
                   onCompare={
                     pending.results[index]?.matches[0]
                       ? () => setCompareIndex(index)
@@ -218,7 +226,14 @@ function DuplicateAddPanel({ pending }: { pending: PendingSourceAdd }) {
             disabled={busy || missingReason}
             onClick={() => {
               if (busy) return;
-              if (missingReason) return;
+              if (missingReason) {
+                setSubmitError(
+                  missingNotes === 1
+                    ? "Add a note on the duplicate file."
+                    : "Add a note on each duplicate file.",
+                );
+                return;
+              }
               setBusy(true);
               setSubmitError("");
               void confirmPendingAdd(notes.map((value) => value.trim()))

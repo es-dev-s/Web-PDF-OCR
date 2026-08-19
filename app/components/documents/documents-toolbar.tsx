@@ -4,7 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, RotateCw, Search } from "lucide-react";
 import { AddDocumentDialog } from "@/app/components/documents/add-document-dialog";
 import { DateFilterButton } from "@/app/components/documents/date-filter";
+import { PeopleFilterButton } from "@/app/components/documents/people-filter";
 import {
+  listedDocuments,
+  listedFileCount,
+  peopleFilterActive,
   useDocumentsStore,
 } from "@/app/store/documents-store";
 import { useUserStore } from "@/app/store/user-store";
@@ -35,18 +39,57 @@ function DocumentSearch() {
   );
 }
 
-function DocumentRowCount() {
-  const items = useDocumentsStore((s) => s.visibleItems);
+function DocumentStats() {
+  const items = useDocumentsStore((s) => s.items);
+  const visible = useDocumentsStore((s) => s.visibleItems);
+  const query = useDocumentsStore((s) => s.query);
+  const dateFrom = useDocumentsStore((s) => s.dateFrom);
+  const dateTo = useDocumentsStore((s) => s.dateTo);
+  const userKind = useDocumentsStore((s) => s.userKind);
+  const teamFilter = useDocumentsStore((s) => s.teamFilter);
   const role = useUserStore((s) => s.role);
-  const count =
-    role === "admin"
-      ? items.filter((item) => item.status !== "pending_review").length
-      : items.length;
+  const rows = listedDocuments(visible, role);
+  const files = listedFileCount(visible, role);
+  const allFiles = listedFileCount(items, role);
+  const narrowed =
+    Boolean(query.trim()) ||
+    Boolean(dateFrom || dateTo) ||
+    peopleFilterActive(userKind, teamFilter);
+
+  const fileLabel = files === 1 ? "document" : "documents";
+  const rowLabel = rows.length === 1 ? "row" : "rows";
+  const fileText =
+    narrowed && files !== allFiles ? `${files} of ${allFiles}` : String(files);
 
   return (
-    <span className="inline-flex h-8 w-[7.5rem] shrink-0 items-center text-[12px] leading-none tabular-nums text-muted">
-      {count} {count === 1 ? "row" : "rows"}
-    </span>
+    <p
+      className={`flex h-8 shrink-0 items-center rounded-xl px-2.5 text-[12px] leading-none tabular-nums transition-[background-color,color] duration-[var(--shell-duration)] ease-[var(--shell-ease)] ${
+        narrowed
+          ? "bg-black/[0.06] text-ink"
+          : "text-muted"
+      }`}
+      title={narrowed ? "Counts for the current filter" : undefined}
+    >
+      <span>
+        <span className={narrowed ? "font-medium" : undefined}>{fileText}</span>
+        <span className={narrowed ? "text-muted" : "text-muted-soft"}>
+          {" "}
+          {fileLabel}
+        </span>
+      </span>
+      <span className={`mx-2 ${narrowed ? "text-muted" : "text-muted-soft"}`}>
+        ·
+      </span>
+      <span>
+        <span className={narrowed ? "font-medium" : undefined}>
+          {rows.length}
+        </span>
+        <span className={narrowed ? "text-muted" : "text-muted-soft"}>
+          {" "}
+          {rowLabel}
+        </span>
+      </span>
+    </p>
   );
 }
 
@@ -123,9 +166,9 @@ export function DocumentsToolbar() {
   return (
     <div className="sticky top-0 z-10 flex h-[var(--toolbar-h)] shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--border)] bg-surface px-4 [contain:layout]">
       <DocumentSearch />
+      <DocumentStats />
       <DateFilterButton />
       <div className="flex shrink-0 items-center gap-1 whitespace-nowrap">
-        <DocumentRowCount />
         {actionError ? (
           <button
             type="button"
@@ -137,6 +180,7 @@ export function DocumentsToolbar() {
           </button>
         ) : null}
         <DocumentReload />
+        <PeopleFilterButton />
         <DocumentAdd />
       </div>
     </div>

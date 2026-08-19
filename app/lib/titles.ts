@@ -69,9 +69,11 @@ export function isTitlePending(
   return looksLikeFilename(value) || value === UNTITLED_DOCUMENT;
 }
 
+export const TITLE_SIMILAR_THRESHOLD = 0.7;
+
 export function similarPercent(score: number): number {
   if (!Number.isFinite(score) || score <= 0) return 0;
-  const pct = score > 1 ? score : score * 100;
+  const pct = score <= 1 ? score * 100 : score;
   return Math.max(0, Math.min(100, Math.round(pct)));
 }
 
@@ -80,7 +82,8 @@ const TITLE_STOP = new Set([
   "of", "on", "over", "per", "the", "to", "using", "via", "with",
 ]);
 
-const WORD_MIN = 0.85;
+const WORD_MIN = 0.8;
+const MIN_MATCHED = 2;
 
 export type TitlePart = {
   text: string
@@ -155,7 +158,18 @@ export function alignedTitleWords(original: string, similar: string) {
     }
   }
   const total = Math.max(left.length, right.length);
-  return { matched, total, leftHit, rightHit, left, right };
+  const score =
+    left.length === 0 || right.length === 0
+      ? 0
+      : (2 * matched) / (left.length + right.length);
+  return { matched, total, score, leftHit, rightHit, left, right };
+}
+
+export function titlesAreSimilar(original: string, similar: string): boolean {
+  const { matched, score, left } = alignedTitleWords(original, similar);
+  if (left.length === 0 || score <= 0) return false;
+  if (score >= 0.999) return true;
+  return score >= TITLE_SIMILAR_THRESHOLD && matched >= MIN_MATCHED;
 }
 
 function highlightWords(title: string, hits: Set<string>): TitlePart[] {

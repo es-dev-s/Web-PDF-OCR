@@ -6,7 +6,7 @@ import { FileText, Plus, Upload, X } from "lucide-react";
 import { AnzscoSelect } from "@/app/components/documents/anzsco-select";
 import { TeamSelect } from "@/app/components/documents/team-select";
 import { DocTitle } from "@/app/components/documents/doc-title";
-import { IncomingDuplicateNote, MatchLine, matchFactsLabel, mergeNotes } from "@/app/components/documents/duplicate-note";
+import { IncomingDuplicateField, MatchLine, matchFactsLabel, mergeNotes } from "@/app/components/documents/duplicate-note";
 import { PreUploadCompare } from "@/app/components/documents/pre-upload-compare";
 import { ApiError, inspectFile, inspectMatchUrl, suggestTitle } from "@/app/lib/api";
 import { formatDateTime } from "@/app/lib/dates";
@@ -706,22 +706,17 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
 
   const inspecting = files.some((file) => inspect[fileKey(file)]?.pending !== false);
   const inspectFailed = files.some((file) => inspect[fileKey(file)]?.failed === true);
-  const hasDuplicate = files.some((file) => {
+  const duplicateFiles = files.filter((file) => {
     const check = inspect[fileKey(file)];
     return Boolean(
       check && !check.pending && !check.failed && check.uniqueness === "duplicate",
     );
   });
-  // Members must justify a duplicate before an admin will review it. Admins can
-  // record the same reason, but nothing blocks them.
-  const needsReason = !admin && hasDuplicate;
-  const missingReason = files.some((file) => {
-    const check = inspect[fileKey(file)];
-    if (!check || check.pending || check.failed || check.uniqueness !== "duplicate") {
-      return false;
-    }
-    return (notes[fileKey(file)] ?? "").trim().length === 0;
-  });
+  const hasDuplicate = duplicateFiles.length > 0;
+  const missingNotes = duplicateFiles.filter(
+    (file) => (notes[fileKey(file)] ?? "").trim().length === 0,
+  ).length;
+  const missingReason = missingNotes > 0;
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -735,8 +730,12 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
       return;
     }
     if (inspecting || inspectFailed) return;
-    if (needsReason && missingReason) {
-      setSubmitError("Add a reason on each duplicate file.");
+    if (missingReason) {
+      setSubmitError(
+        missingNotes === 1
+          ? "Add a note on the duplicate file."
+          : "Add a note on each duplicate file.",
+      );
       return;
     }
     if (erpTaken(erp)) {
@@ -785,7 +784,7 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
     !submitting &&
     !inspecting &&
     !inspectFailed &&
-    (!needsReason || !missingReason);
+    !missingReason;
 
   return createPortal(
     <div
@@ -969,16 +968,6 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
                                 {uniqueMeta.label}
                               </span>
                             )}
-                            {duplicate ? (
-                              <IncomingDuplicateNote
-                                value={notes[key] ?? ""}
-                                onChange={(next) =>
-                                  setNotes((prev) => ({ ...prev, [key]: next }))
-                                }
-                                required={needsReason}
-                                past={matchKept.note}
-                              />
-                            ) : null}
                           </div>
                           <button
                             type="button"
@@ -1001,6 +990,14 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
                                     : () => setCompareKey(key)
                                 }
                               />
+                              <IncomingDuplicateField
+                                value={notes[key] ?? ""}
+                                onChange={(next) => {
+                                  setNotes((prev) => ({ ...prev, [key]: next }));
+                                  if (submitError) setSubmitError("");
+                                }}
+                                missing={(notes[key] ?? "").trim().length === 0}
+                              />
                             </div>
                           ) : null}
                         </li>
@@ -1021,7 +1018,11 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
             </div>
             {hasDuplicate ? (
               <p className="mt-1.5 text-[11px] leading-4 text-muted-soft">
-                The pen is this upload. Past notes under Matches are already on that file.
+                {missingNotes > 0
+                  ? missingNotes === 1
+                    ? "Add a note on the duplicate file to save."
+                    : `Add a note on each duplicate file to save · ${missingNotes} remaining.`
+                  : "Each duplicate has a note."}
               </p>
             ) : files.length === 0 ? (
               <p className="mt-1.5 text-[11px] leading-4 text-muted-soft">
@@ -1066,7 +1067,7 @@ function AddDocumentForm({ onClose }: { onClose: () => void }) {
             className="inline-flex h-8 min-w-[7.5rem] items-center justify-center gap-1.5 rounded-xl bg-ink px-4 text-[13px] font-medium tracking-[-0.015em] text-white outline-none transition-colors duration-[var(--shell-duration)] ease-[var(--shell-ease)] hover:bg-black focus-visible:ring-2 focus-visible:ring-[var(--ring)] disabled:bg-ink/30 disabled:hover:bg-ink/30"
           >
             <Plus className="size-3.5" strokeWidth={1.75} absoluteStrokeWidth />
-            {needsReason ? "Request review" : "Add document"}
+            {hasDuplicate && !admin ? "Request review" : "Add document"}
           </button>
         </div>
       </form>
